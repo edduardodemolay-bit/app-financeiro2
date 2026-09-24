@@ -1,0 +1,34 @@
+{
+  "name": "app-financeiro",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Aplicativo de Gestao Financeira Pessoal",
+  "author": "Edduardo",
+  "type": "module",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "electron:build": "vite build && electron-builder"
+  },
+  "dependencies": {
+    "lucide-react": "^1.16.0"
+  },
+  "devDependencies": {
+    "electron": "30.0.0",
+    "electron-builder": "^26.15.3",
+    "vite": "^5.0.0"
+  },
+  "build": {
+    "appId": "com.financeiro.app",
+    "productName": "FinApp",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "main.cjs"
+    ],
+    "asar": true
+  }
+}

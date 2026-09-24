@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EDD Finanças</title>
+  
+  <!-- Tailwind CSS para utilitários de animação -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- React & ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Babel para interpretar JSX no navegador -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body, html {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background-color: #090d16;
+      color: #f8fafc;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Ícones do Lucide convertidos para componentes React simples
+    const createIcon = (iconName) => ({ size = 20, color = 'currentColor', className = '', style = {} }) => {
+      return React.createElement('i', {
+        'data-lucide': iconName,
+        style: {
+          width: size,
+          height: size,
+          color: color,
+          display: 'inline-block',
+          verticalAlign: 'middle',
+          ...style
+        },
+        className: className
+      });
+    };
+
+    const Wallet = createIcon('wallet');
+    const LayoutDashboard = createIcon('layout-dashboard');
+    const Receipt = createIcon('receipt');
+    const PieChart = createIcon('pie-chart');
+    const Target = createIcon('target');
+    const PlusCircle = createIcon('plus-circle');
+    const Trash2 = createIcon('trash-2');
+    const TrendingUp = createIcon('trending-up');
+    const TrendingDown = createIcon('trending-down');
+    const AlertTriangle = createIcon('alert-triangle');
+    const CheckCircle2 = createIcon('check-circle-2');
+    const Sparkles = createIcon('sparkles');
+    const Save = createIcon('save');
+    const Plus = createIcon('plus');
+    const Minus = createIcon('minus');
+    const Sliders = createIcon('sliders');
+    const ShoppingBag = createIcon('shopping-bag');
+    const CalendarIcon = createIcon('calendar');
+    const ChevronLeft = createIcon('chevron-left');
+    const ChevronRight = createIcon('chevron-right');
+    const Loader2 = createIcon('loader-2');
+
+    const CATEGORIAS = ['Salário', 'Vendas', 'Alimentação', 'Transporte', 'Moradia', 'Lazer', 'Saúde', 'Educação', 'Outros'];
+
+    const CATEGORIA_CORES = {
+      'Salário': { bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: 'rgba(16, 185, 129, 0.3)' },
+      'Vendas': { bg: 'rgba(20, 184, 166, 0.15)', color: '#2dd4bf', border: 'rgba(20, 184, 166, 0.3)' },
+      'Alimentação': { bg: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: 'rgba(245, 158, 11, 0.3)' },
+      'Transporte': { bg: 'rgba(14, 165, 233, 0.15)', color: '#38bdf8', border: 'rgba(14, 165, 233, 0.3)' },
+      'Moradia': { bg: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', border: 'rgba(99, 102, 241, 0.3)' },
+      'Lazer': { bg: 'rgba(168, 85, 247, 0.15)', color: '#c084fc', border: 'rgba(168, 85, 247, 0.3)' },
+      'Saúde': { bg: 'rgba(244, 63, 94, 0.15)', color: '#fb7185', border: 'rgba(244, 63, 94, 0.3)' },
+      'Educação': { bg: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: 'rgba(59, 130, 246, 0.3)' },
+      'Outros': { bg: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8', border: 'rgba(148, 163, 184, 0.3)' }
+    };
+
+    const NOMES_MESES = [
+      'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+      'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+    ];
+
+    function App() {
+      const [transacoes, setTransacoes] = useState([]);
+      
+      const [limitesCategorias, setLimitesCategorias] = useState({
+        'Salário': 0,
+        'Vendas': 0,
+        'Alimentação': 800,
+        'Transporte': 300,
+        'Moradia': 1200,
+        'Lazer': 400,
+        'Saúde': 200,
+        'Educação': 300,
+        'Outros': 200
+      });
+
+      const [metas, setMetas] = useState([
+        { id: 1, nome: 'Reserva de Emergência', objetivo: 5000, economizado: 1800 },
+        { id: 2, nome: 'Viagem de Férias', objetivo: 3500, economizado: 2100 }
+      ]);
+
+      const [valoresAporte, setValoresAporte] = useState({});
+
+      const [abaAtiva, setAbaAtiva] = useState('dashboard');
+      const [filtroTipo, setFiltroTipo] = useState('todas');
+      const [filtroCategoria, setFiltroCategoria] = useState('todas');
+      const [termoPesquisa, setTermoPesquisa] = useState('');
+
+      const [salvando, setSalvando] = useState(false);
+      const [mensagemNotificacao, setMensagemNotificacao] = useState(null);
+
+      const [anoCalendario, setAnoCalendario] = useState(new Date().getFullYear());
+      const [diaSelecionado, setDiaSelecionado] = useState(new Date().toISOString().split('T')[0]);
+
+      const [modalTransacaoAberto, setModalTransacaoAberto] = useState(false);
+      const [descricao, setDescricao] = useState('');
+      const [valor, setValor] = useState('');
+      const [categoria, setCategoria] = useState('Salário');
+      const [tipo, setTipo] = useState('receita');
+      const [dataTransacao, setDataTransacao] = useState(new Date().toISOString().split('T')[0]);
+      const [erroTransacao, setErroTransacao] = useState('');
+
+      const [modalMetaAberto, setModalMetaAberto] = useState(false);
+      const [nomeMeta, setNomeMeta] = useState('');
+      const [objetivoMeta, setObjetivoMeta] = useState('');
+      const [economizadoMeta, setEconomizadoMeta] = useState('');
+
+      const [modalOrcamentoAberto, setModalOrcamentoAberto] = useState(false);
+      const [categoriaEditando, setCategoriaEditando] = useState('Alimentação');
+      const [novoLimiteCategoria, setNovoLimiteCategoria] = useState('');
+
+      useEffect(() => {
+        if (window.lucide) {
+          window.lucide.createIcons();
+        }
+      });
+
+      useEffect(() => {
+        async function carregarDadosIniciais() {
+          if (window.electronAPI) {
+            try {
+              const dadosDoDisco = await window.electronAPI.loadData();
+              if (dadosDoDisco) {
+                if (dadosDoDisco.transacoes) setTransacoes(dadosDoDisco.transacoes);
+                if (dadosDoDisco.limitesCategorias) setLimitesCategorias(prev => ({ ...prev, ...dadosDoDisco.limitesCategorias }));
+                if (dadosDoDisco.metas) setMetas(dadosDoDisco.metas);
+                return;
+              }
+            } catch (e) {
+              console.error("Erro ao carregar dados do Electron:", e);
+            }
+          }
+
+          try {
+            const t = localStorage.getItem('@finapp_transacoes');
+            if (t) setTransacoes(JSON.parse(t));
+            const l = localStorage.getItem('@finapp_limitesCategorias');
+            if (l) setLimitesCategorias(prev => ({ ...prev, ...JSON.parse(l) }));
+            const m = localStorage.getItem('@finapp_metas');
+            if (m) setMetas(JSON.parse(m));
+          } catch (e) {}
+        }
+
+        carregarDadosIniciais();
+      }, []);
+
+      const exibirNotificacao = (texto) => {
+        setMensagemNotificacao(texto);
+        setTimeout(() => {
+          setMensagemNotificacao(null);
+        }, 3000);
+      };
+
+      const salvarTudoNoDisco = async (novosDados = {}, manual = false) => {
+        const payload = {
+          transacoes: novosDados.transacoes !== undefined ? novosDados.transacoes : transacoes,
+          limitesCategorias: novosDados.limitesCategorias !== undefined ? novosDados.limitesCategorias : limitesCategorias,
+          metas: novosDados.metas !== undefined ? novosDados.metas : metas
+        };
+
+        if (manual) setSalvando(true);
+
+        setTimeout(() => {
+          try {
+            localStorage.setItem('@finapp_transacoes', JSON.stringify(payload.transacoes));
+            localStorage.setItem('@finapp_limitesCategorias', JSON.stringify(payload.limitesCategorias));
+            localStorage.setItem('@finapp_metas', JSON.stringify(payload.metas));
+          } catch (e) {}
+        }, 0);
+
+        if (window.electronAPI) {
+          window.electronAPI.saveData(payload)
+            .then(() => {
+              if (manual) {
+                setSalvando(false);
+                exibirNotificacao("💾 Dados salvos em segundo plano com sucesso!");
+              }
+            })
+            .catch((e) => {
+              console.error("Erro ao salvar no Electron:", e);
+              if (manual) {
+                setSalvando(false);
+                exibirNotificacao("❌ Erro ao salvar os dados no disco.");
+              }
+            });
+        } else {
+          if (manual) {
+            setTimeout(() => {
+              setSalvando(false);
+              exibirNotificacao("💾 Dados salvos com sucesso!");
+            }, 500);
+          }
+        }
+      };
+
+      const handleSalvarTudoManual = () => {
+        salvarTudoNoDisco({}, true);
+      };
+
+      const formatarMoeda = (val) => Number(val || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+      const formatarDataBR = (dataISO) => {
+        if (!dataISO) return '';
+        const [ano, mes, dia] = dataISO.split('-');
+        return `${dia}/${mes}/${ano}`;
+      };
+
+      const totalReceitas = transacoes.filter(t => t.type === 'receita').reduce((acc, t) => acc + Number(t.amount), 0);
+      const totalDespesas = transacoes.filter(t => t.type === 'despesa').reduce((acc, t) => acc + Number(t.amount), 0);
+      const totalGastos = transacoes.filter(t => t.type === 'gasto').reduce((acc, t) => acc + Number(t.amount), 0);
+      
+      const totalSaidas = totalDespesas + totalGastos;
+      const saldoTotal = totalReceitas - totalSaidas;
+
+      const categoriasDeGastos = CATEGORIAS.filter(c => c !== 'Salário' && c !== 'Vendas');
+
+      const gastosPorCategoria = categoriasDeGastos.reduce((acc, cat) => {
+        acc[cat] = transacoes
+          .filter(t => (t.type === 'despesa' || t.type === 'gasto') && t.category === cat)
+          .reduce((sum, t) => sum + Number(t.amount), 0);
+        return acc;
+      }, {});
+
+      const orcamentoTotalPlanejado = categoriasDeGastos.reduce((a, cat) => a + Number(limitesCategorias[cat] || 0), 0);
+      const totalGastoGeral = Object.values(gastosPorCategoria).reduce((a, b) => a + Number(b), 0);
+      const saldoRestanteGeral = orcamentoTotalPlanejado - totalGastoGeral;
+      const percentualOrcamento = orcamentoTotalPlanejado > 0 ? (totalGastoGeral / orcamentoTotalPlanejado) * 100 : 0;
+
+      function adicionarTransacao(e) {
+        e.preventDefault();
+        setErroTransacao('');
+        if (!descricao.trim()) { setErroTransacao('A descrição é obrigatória.'); return; }
+        const numValor = Number(valor);
+        if (isNaN(numValor) || numValor <= 0) { setErroTransacao('O valor deve ser maior que zero.'); return; }
+
+        const nova = { id: Date.now(), description: descricao.trim(), amount: numValor, category: categoria, type: tipo, date: dataTransacao };
+        const novasTransacoes = [nova, ...transacoes].sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        setTransacoes(novasTransacoes);
+        setDescricao(''); setValor(''); setModalTransacaoAberto(false);
+        salvarTudoNoDisco({ transacoes: novasTransacoes });
+      }
+
+      function excluirTransacao(id) {
+        if (confirm('Deseja excluir este lançamento?')) {
+          const novasTransacoes = transacoes.filter(t => t.id !== id);
+          setTransacoes(novasTransacoes);
+          salvarTudoNoDisco({ transacoes: novasTransacoes });
+        }
+      }
+
+      const transacoesFiltradas = transacoes.filter(t => {
+        if (filtroTipo !== 'todas' && t.type !== filtroTipo) return false;
+        if (filtroCategoria !== 'todas' && t.category !== filtroCategoria) return false;
+        if (termoPesquisa && !t.description.toLowerCase().includes(termoPesquisa.toLowerCase())) return false;
+        return true;
+      });
+
+      function adicionarMeta(e) {
+        e.preventDefault();
+        if (!nomeMeta || !objetivoMeta) return;
+        const novasMetas = [...metas, { id: Date.now(), nome: nomeMeta, objetivo: Number(objetivoMeta), economizado: Number(economizadoMeta || 0) }];
+        
+        setMetas(novasMetas);
+        setNomeMeta(''); setObjetivoMeta(''); setEconomizadoMeta(''); setModalMetaAberto(false);
+        salvarTudoNoDisco({ metas: novasMetas });
+      }
+
+      function alterarValorMeta(id, operacao) {
+        const quantia = Number(valoresAporte[id]);
+        if (isNaN(quantia) || quantia <= 0) return;
+
+        const metaAlvo = metas.find(m => m.id === id);
+        const nomeDaMeta = metaAlvo ? metaAlvo.nome : 'Meta';
+
+        const novasMetas = metas.map(m => {
+          if (m.id === id) {
+            const atual = Number(m.economizado || 0);
+            const novoValor = operacao === 'somar' ? atual + quantia : Math.max(0, atual - quantia);
+            return { ...m, economizado: novoValor };
+          }
+          return m;
+        });
+
+        const novaTransacao = {
+          id: Date.now(),
+          description: operacao === 'somar' ? `Aporte: ${nomeDaMeta}` : `Retirada: ${nomeDaMeta}`,
+          amount: quantia,
+          category: 'Outros',
+          type: operacao === 'somar' ? 'gasto' : 'receita',
+          date: new Date().toISOString().split('T')[0]
+        };
+
+        const novasTransacoes = [novaTransacao, ...transacoes].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        setMetas(novasMetas);
+        setTransacoes(novasTransacoes);
+        setValoresAporte(prev => ({ ...prev, [id]: '' }));
+
+        salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes });
+      }
+
+      function excluirMeta(id) {
+        if (confirm('Deseja excluir esta meta?')) {
+          const novasMetas = metas.filter(m => m.id !== id);
+          setMetas(novasMetas);
+          salvarTudoNoDisco({ metas: novasMetas });
+        }
+      }
+
+      function handleSalvarLimiteCategoria(e) {
+        e.preventDefault();
+        const val = Number(novoLimiteCategoria);
+        if (isNaN(val) || val < 0) return;
+
+        const novosLimites = { ...limitesCategorias, [categoriaEditando]: val };
+        setLimitesCategorias(novosLimites);
+        setModalOrcamentoAberto(false);
+        setNovoLimiteCategoria('');
+        salvarTudoNoDisco({ limitesCategorias: novosLimites });
+      }
+
+      const abrirModalComData = (dataFormatted) => {
+        setDataTransacao(dataFormatted);
+        setModalTransacaoAberto(true);
+      };
+
+      const renderIconeTipo = (t) => {
+        if (t === 'receita') return <TrendingUp size={18} />;
+        if (t === 'despesa') return <TrendingDown size={18} />;
+        return <ShoppingBag size={18} />;
+      };
+
+      const renderCorTipo = (t) => {
+        if (t === 'receita') return '#34d399';
+        if (t === 'despesa') return '#fb7185';
+        return '#f59e0b';
+      };
+
+      const renderBgTipo = (t) => {
+        if (t === 'receita') return 'rgba(16, 185, 129, 0.15)';
+        if (t === 'despesa') return 'rgba(244, 63, 94, 0.15)';
+        return 'rgba(245, 158, 11, 0.15)';
+      };
+
+      const gerarDiasDoMes = (ano, mesIndice) => {
+        const primeiroDia = new Date(ano, mesIndice, 1).getDay();
+        const totalDias = new Date(ano, mesIndice + 1, 0).getDate();
+        return { primeiroDia, totalDias };
+      };
+
+      const transacoesPorDia = transacoes.reduce((acc, t) => {
+        if (!acc[t.date]) acc[t.date] = [];
+        acc[t.date].push(t);
+        return acc;
+      }, {});
+
+      const transacoesDiaSelecionado = transacoes.filter(t => t.date === diaSelecionado);
+
+      const estilos = {
+        container: { display: 'flex', height: '100vh', backgroundColor: '#090d16', color: '#f8fafc', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' },
+        sidebar: { width: '270px', backgroundColor: '#0e1525', borderRight: '1px solid #1e293b', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '24px' },
+        main: { flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' },
+        header: { height: '80px', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 32px', backgroundColor: '#0e1525', position: 'sticky', top: 0, zIndex: 20 },
+        card: { backgroundColor: '#121c33', border: '1px solid #1e293b', borderRadius: '16px', padding: '24px', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)' },
+        buttonPrimary: { background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#090d16', padding: '12px 20px', borderRadius: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)' },
+        buttonSave: { background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)', color: '#ffffff', padding: '12px 20px', borderRadius: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 12px rgba(59, 130, 246, 0.25)' },
+        input: { width: '100%', backgroundColor: '#090d16', border: '1px solid #334155', borderRadius: '12px', padding: '12px 16px', color: '#f8fafc', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
+        modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 50 },
+        modalContent: { backgroundColor: '#0e1525', border: '1px solid #1e293b', borderRadius: '20px', width: '100%', maxWidth: '450px', padding: '32px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }
+      };
+
+      return (
+        <div style={estilos.container}>
+
+          {mensagemNotificacao && (
+            <div style={{
+              position: 'fixed',
+              top: '20px',
+              right: '20px',
+              backgroundColor: '#10b981',
+              color: '#090d16',
+              padding: '12px 20px',
+              borderRadius: '12px',
+              fontWeight: 'bold',
+              boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px'
+            }}>
+              <CheckCircle2 size={18} /> {mensagemNotificacao}
+            </div>
+          )}
+
+          <aside style={estilos.sidebar}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '36px' }}>
+                <div style={{ backgroundColor: '#10b981', color: '#090d16', padding: '10px', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 16px rgba(16,185,129,0.3)' }}>
+                  <Wallet size={24} />
+                </div>
+                <div>
+                  <h1 style={{ fontSize: '20px', fontWeight: '800', margin: 0, color: '#ffffff' }}>EDD finanças</h1>
+                  <p style={{ fontSize: '11px', color: '#10b981', margin: 0, fontWeight: '600', textTransform: 'uppercase' }}>Gestão Financeira</p>
+                </div>
+              </div>
+
+              <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {[
+                  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+                  { id: 'orcamento', label: 'Orçamento', icon: PieChart },
+                  { id: 'extrato', label: 'Extrato', icon: Receipt },
+                  { id: 'metas', label: 'Metas', icon: Target },
+                  { id: 'calendario', label: 'Calendário', icon: CalendarIcon }
+                ].map(item => {
+                  const Icon = item.icon;
+                  const ativo = abaAtiva === item.id;
+                  return (
+                    <button 
+                      key={item.id}
+                      onClick={() => setAbaAtiva(item.id)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '14px', width: '100%', padding: '14px 16px', borderRadius: '12px', fontWeight: ativo ? '700' : '500',
+                        backgroundColor: ativo ? '#10b981' : 'transparent', color: ativo ? '#090d16' : '#94a3b8', border: 'none', cursor: 'pointer', transition: '0.2s',
+                        boxShadow: ativo ? '0 4px 12px rgba(16,185,129,0.3)' : 'none'
+                      }}
+                    >
+                      <Icon size={20} /> {item.label}
+                    </button>
+                  );
+                })}
+              </nav>
+            </div>
+
+            <div style={{ backgroundColor: '#090d16', border: '1px solid #1e293b', borderRadius: '14px', padding: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '12px' }}>
+                <span style={{ color: '#94a3b8' }}>Orçamento Usado</span>
+                <span style={{ color: percentualOrcamento >= 100 ? '#f43f5e' : '#10b981', fontWeight: 'bold' }}>{percentualOrcamento.toFixed(0)}%</span>
+              </div>
+              <div style={{ width: '100%', backgroundColor: '#1e293b', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(100, percentualOrcamento)}%`, backgroundColor: percentualOrcamento >= 100 ? '#f43f5e' : '#10b981', height: '100%', borderRadius: '999px' }}></div>
+              </div>
+            </div>
+          </aside>
+
+          <main style={estilos.main}>
+            <header style={estilos.header}>
+              <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#ffffff', margin: 0 }}>
+                {abaAtiva === 'dashboard' && 'Visão Geral do Mês'}
+                {abaAtiva === 'orcamento' && 'Planejamento de Orçamento'}
+                {abaAtiva === 'extrato' && 'Extrato de Lançamentos'}
+                {abaAtiva === 'metas' && 'Metas e Objetivos'}
+                {abaAtiva === 'calendario' && 'Calendário Anual Interativo'}
+              </h2>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button onClick={handleSalvarTudoManual} style={estilos.buttonSave} title="Salvar tudo permanentemente sem parar o app">
+                  {salvando ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} 
+                  {salvando ? 'Salvando...' : 'Salvar Tudo'}
+                </button>
+                <button onClick={() => abrirModalComData(new Date().toISOString().split('T')[0])} style={estilos.buttonPrimary}>
+                  <PlusCircle size={20} /> Novo Lançamento
+                </button>
+              </div>
+            </header>
+
+            <div style={{ padding: '32px', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+              
+              {abaAtiva === 'dashboard' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px' }}>
+                    <div style={estilos.card}>
+                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Saldo Total</p>
+                      <h3 style={{ fontSize: '28px', fontWeight: '800', color: saldoTotal >= 0 ? '#34d399' : '#fb7185', margin: 0 }}>{formatarMoeda(saldoTotal)}</h3>
+                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Sparkles size={12} color="#10b981" /> Atualizado em tempo real
+                      </p>
+                    </div>
+
+                    <div style={estilos.card}>
+                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Receitas</p>
+                      <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#34d399', margin: 0 }}>{formatarMoeda(totalReceitas)}</h3>
+                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Salários, Vendas e Entradas</p>
+                    </div>
+
+                    <div style={estilos.card}>
+                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Despesas (Fixas)</p>
+                      <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#fb7185', margin: 0 }}>{formatarMoeda(totalDespesas)}</h3>
+                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Contas essenciais</p>
+                    </div>
+
+                    <div style={estilos.card}>
+                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Gastos (Variáveis)</p>
+                      <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#f59e0b', margin: 0 }}>{formatarMoeda(totalGastos)}</h3>
+                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Extras / Aportes</p>
+                    </div>
+                  </div>
+
+                  {percentualOrcamento >= 90 && (
+                    <div style={{ backgroundColor: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.4)', borderRadius: '16px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '16px', color: '#fb7185' }}>
+                      <AlertTriangle size={24} />
+                      <div>
+                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 'bold' }}>Alerta de Orçamento</h4>
+                        <p style={{ margin: 0, fontSize: '12px', opacity: 0.9 }}>Você está muito próximo ou ultrapassou o teto total de gastos planejado.</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={estilos.card}>
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 20px 0' }}>Últimos Lançamentos</h3>
+                    {transacoes.length === 0 ? (
+                      <p style={{ color: '#64748b', textAlign: 'center', padding: '24px 0', fontSize: '14px' }}>Nenhum lançamento registrado no extrato.</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {transacoes.slice(0, 5).map(t => {
+                          const cfg = CATEGORIA_CORES[t.category] || { bg: '#1e293b', color: '#cbd5e1', border: '#334155' };
+                          return (
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#090d16', border: '1px solid #1e293b', padding: '14px 18px', borderRadius: '12px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
+                                  {renderIconeTipo(t.type)}
+                                </div>
+                                <div>
+                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: '#f8fafc', fontSize: '14px' }}>{t.description}</p>
+                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
+                                    <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type), fontWeight: '700', textTransform: 'uppercase' }}>
+                                      {t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto'}
+                                    </span>
+                                    <span style={{ fontSize: '11px', color: '#64748b' }}>{formatarDataBR(t.date)}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <span style={{ fontWeight: 'bold', fontSize: '15px', color: renderCorTipo(t.type) }}>
+                                {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {abaAtiva === 'orcamento' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px' }}>
+                    <div style={estilos.card}>
+                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Teto Planejado</p>
+                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: '#38bdf8', margin: 0 }}>{formatarMoeda(orcamentoTotalPlanejado)}</h3>
+                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Soma das categorias de saída</p>
+                    </div>
+
+                    <div style={estilos.card}>
+                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Total Consumido</p>
+                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: totalGastoGeral > orcamentoTotalPlanejado ? '#fb7185' : '#f59e0b', margin: 0 }}>{formatarMoeda(totalGastoGeral)}</h3>
+                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Despesas + Gastos</p>
+                    </div>
+
+                    <div style={estilos.card}>
+                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Disponível</p>
+                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: saldoRestanteGeral >= 0 ? '#34d399' : '#fb7185', margin: 0 }}>{formatarMoeda(saldoRestanteGeral)}</h3>
+                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>{saldoRestanteGeral >= 0 ? 'Dentro da meta' : 'Excedido'}</p>
+                    </div>
+                  </div>
+
+                  <div style={estilos.card}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                      <div>
+                        <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: 0 }}>Planejamento de Saídas por Categoria</h3>
+                        <p style={{ fontSize: '12px', color: '#94a3b8', margin: '4px 0 0 0' }}>Defina e controle o teto de despesas e gastos das categorias de saída</p>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+                      {categoriasDeGastos.map(cat => {
+                        const limite = limitesCategorias[cat] || 0;
+                        const gasto = gastosPorCategoria[cat] || 0;
+                        const pct = limite > 0 ? (gasto / limite) * 100 : 0;
+                        const cfg = CATEGORIA_CORES[cat] || { bg: '#1e293b', color: '#cbd5e1', border: '#334155' };
+
+                        let corStatus = '#10b981';
+                        if (pct >= 80 && pct < 100) corStatus = '#f59e0b';
+                        if (pct >= 100) corStatus = '#f43f5e';
+
+                        return (
+                          <div key={cat} style={{ backgroundColor: '#090d16', border: '1px solid #1e293b', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '8px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '700' }}>
+                                {cat}
+                              </span>
+                              <button 
+                                onClick={() => {
+                                  setCategoriaEditando(cat);
+                                  setNovoLimiteCategoria(limite);
+                                  setModalOrcamentoAberto(true);
+                                }}
+                                style={{ background: 'none', border: 'none', color: '#38bdf8', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                              >
+                                <Sliders size={14} /> Ajustar
+                              </button>
+                            </div>
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                              <div>
+                                <span style={{ fontSize: '20px', fontWeight: '800', color: '#ffffff' }}>{formatarMoeda(gasto)}</span>
+                                <span style={{ fontSize: '12px', color: '#64748b', marginLeft: '6px' }}>/ {formatarMoeda(limite)}</span>
+                              </div>
+                              <span style={{ fontSize: '12px', fontWeight: 'bold', color: corStatus }}>
+                                {pct.toFixed(0)}%
+                              </span>
+                            </div>
+
+                            <div style={{ width: '100%', backgroundColor: '#1e293b', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
+                              <div style={{ width: `${Math.min(100, pct)}%`, backgroundColor: corStatus, height: '100%', borderRadius: '999px', transition: 'width 0.3s ease' }}></div>
+                            </div>
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#64748b' }}>
+                              <span>{limite - gasto >= 0 ? 'Resta:' : 'Excedido:'}</span>
+                              <strong style={{ color: limite - gasto >= 0 ? '#34d399' : '#fb7185' }}>{formatarMoeda(Math.abs(limite - gasto))}</strong>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                </div>
+              )}
+
+              {abaAtiva === 'extrato' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  <div style={estilos.card}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                      <input type="text" placeholder="Pesquisar descrição..." value={termoPesquisa} onChange={e => setTermoPesquisa(e.target.value)} style={estilos.input} />
+                      <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} style={estilos.input}>
+                        <option value="todas">Todos os Tipos</option>
+                        <option value="receita">Receitas</option>
+                        <option value="despesa">Despesas (Fixas)</option>
+                        <option value="gasto">Gastos (Variáveis)</option>
+                      </select>
+                      <select value={filtroCategoria} onChange={e => setFiltroCategoria(e.target.value)} style={estilos.input}>
+                        <option value="todas">Todas as Categorias</option>
+                        {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={estilos.card}>
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 20px 0' }}>Extrato Completo ({transacoesFiltradas.length})</h3>
+                    {transacoesFiltradas.length === 0 ? (
+                      <p style={{ color: '#64748b', textAlign: 'center', padding: '32px 0' }}>Nenhum lançamento encontrado no extrato.</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {transacoesFiltradas.map(t => {
+                          const cfg = CATEGORIA_CORES[t.category] || { bg: '#1e293b', color: '#cbd5e1', border: '#334155' };
+                          return (
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#090d16', border: '1px solid #1e293b', padding: '14px 18px', borderRadius: '12px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
+                                  {renderIconeTipo(t.type)}
+                                </div>
+                                <div>
+                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: '#f8fafc', fontSize: '14px' }}>{t.description}</p>
+                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
+                                    <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type), fontWeight: '700', textTransform: 'uppercase' }}>
+                                      {t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto'}
+                                    </span>
+                                    <span style={{ fontSize: '11px', color: '#64748b' }}>{formatarDataBR(t.date)}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                                <span style={{ fontWeight: 'bold', fontSize: '15px', color: renderCorTipo(t.type) }}>
+                                  {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
+                                </span>
+                                <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }} title="Excluir">
+                                  <Trash2 size={18} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {abaAtiva === 'metas' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: 0 }}>Metas e Objetivos</h3>
+                    <button onClick={() => setModalMetaAberto(true)} style={estilos.buttonPrimary}>
+                      <PlusCircle size={18} /> Nova Meta
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
+                    {metas.length === 0 ? (
+                      <p style={{ color: '#64748b', gridColumn: 'span 2', textAlign: 'center', padding: '40px 0' }}>Nenhuma meta criada.</p>
+                    ) : (
+                      metas.map(meta => {
+                        const progresso = meta.objetivo > 0 ? (meta.economizado / meta.objetivo) * 100 : 0;
+                        const concluida = progresso >= 100;
+                        return (
+                          <div key={meta.id} style={estilos.card}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px' }}>
+                              <div>
+                                <h4 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold', color: '#ffffff' }}>{meta.nome}</h4>
+                                <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>Objetivo: <strong style={{ color: '#34d399' }}>{formatarMoeda(meta.objetivo)}</strong></p>
+                              </div>
+                              <button onClick={() => excluirMeta(meta.id)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }} title="Excluir Meta">
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold' }}>
+                                <span style={{ color: '#94a3b8' }}>Guardado: {formatarMoeda(meta.economizado)}</span>
+                                <span style={{ color: concluida ? '#34d399' : '#cbd5e1' }}>{progresso.toFixed(0)}%</span>
+                              </div>
+                              <div style={{ width: '100%', backgroundColor: '#090d16', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
+                                <div style={{ width: `${Math.min(100, progresso)}%`, backgroundColor: '#10b981', height: '100%', borderRadius: '999px' }}></div>
+                              </div>
+                            </div>
+
+                            {concluida && (
+                              <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '10px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                                <CheckCircle2 size={16} /> Meta concluída com sucesso!
+                              </div>
+                            )}
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '12px', borderTop: '1px solid #1e293b' }}>
+                              <span style={{ fontSize: '12px', color: '#94a3b8' }}>Movimentar valor da meta:</span>
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                <input 
+                                  type="number" 
+                                  step="0.01" 
+                                  placeholder="R$ 0,00" 
+                                  value={valoresAporte[meta.id] || ''} 
+                                  onChange={e => setValoresAporte({ ...valoresAporte, [meta.id]: e.target.value })} 
+                                  style={{ ...estilos.input, padding: '8px 12px', fontSize: '12px', flex: 1 }} 
+                                />
+                                <button 
+                                  onClick={() => alterarValorMeta(meta.id, 'somar')} 
+                                  style={{ backgroundColor: '#10b981', color: '#090d16', border: 'none', borderRadius: '8px', padding: '0 10px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
+                                  title="Adicionar à meta"
+                                >
+                                  <Plus size={14} /> Aporte
+                                </button>
+                                <button 
+                                  onClick={() => alterarValorMeta(meta.id, 'subtrair')} 
+                                  style={{ backgroundColor: 'rgba(244, 63, 94, 0.2)', color: '#fb7185', border: '1px solid rgba(244, 63, 94, 0.4)', borderRadius: '8px', padding: '0 10px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
+                                  title="Retirar da meta"
+                                >
+                                  <Minus size={14} /> Retirar
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {abaAtiva === 'calendario' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#121c33', padding: '20px 24px', borderRadius: '16px', border: '1px solid #1e293b' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      <button onClick={() => setAnoCalendario(anoCalendario - 1)} style={{ backgroundColor: '#090d16', border: '1px solid #1e293b', color: '#ffffff', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                        <ChevronLeft size={20} />
+                      </button>
+                      <h3 style={{ fontSize: '22px', fontWeight: '800', margin: 0, color: '#10b981' }}>{anoCalendario}</h3>
+                      <button onClick={() => setAnoCalendario(anoCalendario + 1)} style={{ backgroundColor: '#090d16', border: '1px solid #1e293b', color: '#ffffff', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                        <ChevronRight size={20} />
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      <div style={{ textAlign: 'right' }}>
+                        <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>Dia Selecionado:</p>
+                        <strong style={{ fontSize: '16px', color: '#ffffff' }}>{formatarDataBR(diaSelecionado)}</strong>
+                      </div>
+                      <button onClick={() => abrirModalComData(diaSelecionado)} style={{ ...estilos.buttonPrimary, padding: '10px 16px', fontSize: '13px' }}>
+                        <Plus size={16} /> Lançar neste dia
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={estilos.card}>
+                    <h4 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: 'bold', color: '#ffffff' }}>
+                      Lançamentos do dia {formatarDataBR(diaSelecionado)}
+                    </h4>
+                    {transacoesDiaSelecionado.length === 0 ? (
+                      <p style={{ margin: 0, color: '#64748b', fontSize: '14px', fontStyle: 'italic' }}>Nenhuma movimentação nesta data. Clique em "Lançar neste dia" para adicionar.</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {transacoesDiaSelecionado.map(t => {
+                          const cfg = CATEGORIA_CORES[t.category] || { bg: '#1e293b', color: '#cbd5e1', border: '#334155' };
+                          return (
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#090d16', padding: '12px 16px', borderRadius: '12px', border: '1px solid #1e293b' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <div style={{ padding: '8px', borderRadius: '8px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
+                                  {renderIconeTipo(t.type)}
+                                </div>
+                                <div>
+                                  <p style={{ margin: 0, fontWeight: 'bold', color: '#ffffff', fontSize: '14px' }}>{t.description}</p>
+                                  <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                                <span style={{ fontWeight: 'bold', color: renderCorTipo(t.type), fontSize: '15px' }}>
+                                  {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
+                                </span>
+                                <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+                    {NOMES_MESES.map((nomeMes, idxMes) => {
+                      const { primeiroDia, totalDias } = gerarDiasDoMes(anoCalendario, idxMes);
+                      const diasEmBranco = Array.from({ length: primeiroDia });
+                      const diasDoMes = Array.from({ length: totalDias }, (_, i) => i + 1);
+
+                      return (
+                        <div key={nomeMes} style={{ backgroundColor: '#121c33', border: '1px solid #1e293b', borderRadius: '16px', padding: '16px' }}>
+                          <h4 style={{ margin: '0 0 12px 0', textAlign: 'center', color: '#38bdf8', fontSize: '15px', fontWeight: 'bold' }}>
+                            {nomeMes}
+                          </h4>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', fontSize: '11px', color: '#64748b', fontWeight: 'bold', marginBottom: '8px' }}>
+                            <span>D</span><span>S</span><span>T</span><span>Q</span><span>Q</span><span>S</span><span>S</span>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' }}>
+                            {diasEmBranco.map((_, i) => (
+                              <div key={`blank-${i}`} />
+                            ))}
+                            {diasDoMes.map(dia => {
+                              const mesFormatado = String(idxMes + 1).padStart(2, '0');
+                              const diaFormatado = String(dia).padStart(2, '0');
+                              const dataChave = `${anoCalendario}-${mesFormatado}-${diaFormatado}`;
+                              
+                              const itensDoDia = transacoesPorDia[dataChave] || [];
+                              const temEntrada = itensDoDia.some(t => t.type === 'receita');
+                              const temSaida = itensDoDia.some(t => t.type === 'despesa' || t.type === 'gasto');
+                              
+                              const selecionado = diaSelecionado === dataChave;
+
+                              return (
+                                <button
+                                  key={dia}
+                                  onClick={() => setDiaSelecionado(dataChave)}
+                                  style={{
+                                    aspectRatio: '1',
+                                    backgroundColor: selecionado ? '#10b981' : '#090d16',
+                                    color: selecionado ? '#090d16' : '#f8fafc',
+                                    border: selecionado ? '2px solid #34d399' : '1px solid #1e293b',
+                                    borderRadius: '8px',
+                                    fontSize: '12px',
+                                    fontWeight: selecionado || itensDoDia.length > 0 ? 'bold' : 'normal',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    justify: 'center',
+                                    position: 'relative',
+                                    transition: '0.15s'
+                                  }}
+                                >
+                                  <span>{dia}</span>
+                                  {itensDoDia.length > 0 && (
+                                    <div style={{ display: 'flex', gap: '2px', position: 'absolute', bottom: '3px' }}>
+                                      {temEntrada && <div style={{ width: '4px', height: '4px', borderRadius: '50%', backgroundColor: selecionado ? '#090d16' : '#34d399' }}></div>}
+                                      {temSaida && <div style={{ width: '4px', height: '4px', borderRadius: '50%', backgroundColor: selecionado ? '#f43f5e' : '#fb7185' }}></div>}
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                </div>
+              )}
+
+            </div>
+          </main>
+
+          {modalTransacaoAberto && (
+            <div style={estilos.modalOverlay}>
+              <div style={estilos.modalContent}>
+                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 20px 0' }}>Novo Lançamento</h3>
+                {erroTransacao && <div style={{ backgroundColor: 'rgba(244,63,94,0.15)', color: '#fb7185', padding: '10px', borderRadius: '8px', fontSize: '12px', marginBottom: '16px' }}>{erroTransacao}</div>}
+                <form onSubmit={adicionarTransacao} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Descrição</label>
+                    <input type="text" value={descricao} onChange={e => setDescricao(e.target.value)} placeholder="Ex: Salário Empresa, Venda de Produto..." style={{ ...estilos.input, marginTop: '6px' }} required />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Valor (R$)</label>
+                      <input type="number" step="0.01" value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} required />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Tipo de Lançamento</label>
+                      <select value={tipo} onChange={e => setTipo(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }}>
+                        <option value="receita">Receita (Entrada)</option>
+                        <option value="despesa">Despesa (Fixa/Essencial)</option>
+                        <option value="gasto">Gasto (Variável/Extra)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Categoria</label>
+                      <select value={categoria} onChange={e => setCategoria(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }}>
+                        {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Data</label>
+                      <input type="date" value={dataTransacao} onChange={e => setDataTransacao(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+                    <button type="button" onClick={() => setModalTransacaoAberto(false)} style={{ backgroundColor: '#1e293b', color: '#f8fafc', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
+                    <button type="submit" style={estilos.buttonPrimary}>Guardar</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {modalMetaAberto && (
+            <div style={estilos.modalOverlay}>
+              <div style={estilos.modalContent}>
+                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 20px 0' }}>Nova Meta</h3>
+                <form onSubmit={adicionarMeta} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Nome da Meta</label>
+                    <input type="text" value={nomeMeta} onChange={e => setNomeMeta(e.target.value)} placeholder="Ex: Comprar Carro" style={{ ...estilos.input, marginTop: '6px' }} required />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Valor Desejado (R$)</label>
+                      <input type="number" step="0.01" value={objetivoMeta} onChange={e => setObjetivoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} required />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Já Economizado</label>
+                      <input type="number" step="0.01" value={economizadoMeta} onChange={e => setEconomizadoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+                    <button type="button" onClick={() => setModalMetaAberto(false)} style={{ backgroundColor: '#1e293b', color: '#f8fafc', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
+                    <button type="submit" style={estilos.buttonPrimary}>Criar Meta</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {modalOrcamentoAberto && (
+            <div style={estilos.modalOverlay}>
+              <div style={estilos.modalContent}>
+                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 8px 0' }}>
+                  Ajustar Limite - {categoriaEditando}
+                </h3>
+                <p style={{ fontSize: '13px', color: '#94a3b8', margin: '0 0 20px 0' }}>Defina o valor máximo de gastos mensal para esta categoria.</p>
+                
+                <form onSubmit={handleSalvarLimiteCategoria} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Limite Mensal (R$)</label>
+                    <input 
+                      type="number" 
+                      step="0.01" 
+                      value={novoLimiteCategoria} 
+                      onChange={e => setNovoLimiteCategoria(e.target.value)} 
+                      placeholder="0,00" 
+                      style={{ ...estilos.input, marginTop: '6px', fontSize: '16px', fontWeight: 'bold', color: '#34d399' }} 
+                      required 
+                      autoFocus 
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+                    <button type="button" onClick={() => setModalOrcamentoAberto(false)} style={{ backgroundColor: '#1e293b', color: '#f8fafc', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
+                    <button type="submit" style={estilos.buttonPrimary}>Salvar Limite</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    }
+
+    const container = document.getElementById('root');
+    const root = ReactDOM.createRoot(container);
+    root.render(<App />);
+  </script>
+</body>
+</html>
