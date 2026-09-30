@@ -23,7 +23,7 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://unpkg.com/lucide@1.49.0/dist/umd/lucide.min.js"></script>
 
   <style>
     :root {
@@ -102,22 +102,29 @@
   </script>
 
   <script type="text/babel">
-    const { useState, useEffect } = React;
+    const { useState, useEffect, useRef } = React;
 
-    // Ícones do Lucide convertidos para componentes React simples
+    // Ícones do Lucide desenhados pelo próprio React (como <svg>).
+    // Antes usávamos lucide.createIcons(), que troca elementos da tela por fora do React
+    // e fazia o app ficar em branco ao mudar um ícone (ex.: botão Salvar).
     const createIcon = (iconName) => ({ size = 20, color = 'currentColor', className = '', style = {} }) => {
-      return React.createElement('i', {
-        'data-lucide': iconName,
-        style: {
-          width: size,
-          height: size,
-          color: color,
-          display: 'inline-block',
-          verticalAlign: 'middle',
-          ...style
-        },
-        className: className
-      });
+      const nomePascal = iconName.replace(/(^|-)([a-z0-9])/g, (_, __, c) => c.toUpperCase());
+      const lib = window.lucide || {};
+      const desenho = (lib.icons && lib.icons[nomePascal]) || lib[nomePascal];
+      const partes = Array.isArray(desenho) && desenho[0] === 'svg' ? desenho[2] : desenho;
+      return React.createElement('svg', {
+        xmlns: 'http://www.w3.org/2000/svg',
+        width: size,
+        height: size,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: color,
+        strokeWidth: 2,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        className: className,
+        style: { display: 'inline-block', verticalAlign: 'middle', flexShrink: 0, ...style }
+      }, Array.isArray(partes) ? partes.map(([tag, attrs], i) => React.createElement(tag, { key: i, ...attrs })) : null);
     };
 
     const Wallet = createIcon('wallet');
@@ -156,6 +163,12 @@
       'Outros': { bg: 'rgba(148, 163, 184, 0.15)', color: 'var(--text-muted)', border: 'rgba(148, 163, 184, 0.3)' }
     };
 
+    // Data de hoje no fuso do aparelho (toISOString usa UTC e, no Brasil, virava o dia seguinte após as 21h)
+    const hojeISO = () => {
+      const d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    };
+
     const NOMES_MESES = [
       'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
       'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
@@ -176,10 +189,7 @@
         'Outros': 200
       });
 
-      const [metas, setMetas] = useState([
-        { id: 1, nome: 'Reserva de Emergência', objetivo: 5000, economizado: 1800 },
-        { id: 2, nome: 'Viagem de Férias', objetivo: 3500, economizado: 2100 }
-      ]);
+      const [metas, setMetas] = useState([]);
 
       const [valoresAporte, setValoresAporte] = useState({});
 
@@ -232,14 +242,14 @@
       const [mensagemNotificacao, setMensagemNotificacao] = useState(null);
 
       const [anoCalendario, setAnoCalendario] = useState(new Date().getFullYear());
-      const [diaSelecionado, setDiaSelecionado] = useState(new Date().toISOString().split('T')[0]);
+      const [diaSelecionado, setDiaSelecionado] = useState(hojeISO());
 
       const [modalTransacaoAberto, setModalTransacaoAberto] = useState(false);
       const [descricao, setDescricao] = useState('');
       const [valor, setValor] = useState('');
       const [categoria, setCategoria] = useState('Salário');
       const [tipo, setTipo] = useState('receita');
-      const [dataTransacao, setDataTransacao] = useState(new Date().toISOString().split('T')[0]);
+      const [dataTransacao, setDataTransacao] = useState(hojeISO());
       const [erroTransacao, setErroTransacao] = useState('');
 
       const [modalMetaAberto, setModalMetaAberto] = useState(false);
@@ -250,12 +260,6 @@
       const [modalOrcamentoAberto, setModalOrcamentoAberto] = useState(false);
       const [categoriaEditando, setCategoriaEditando] = useState('Alimentação');
       const [novoLimiteCategoria, setNovoLimiteCategoria] = useState('');
-
-      useEffect(() => {
-        if (window.lucide) {
-          window.lucide.createIcons();
-        }
-      });
 
       useEffect(() => {
         async function carregarDadosIniciais() {
@@ -278,6 +282,11 @@
             if (t) setTransacoes(JSON.parse(t));
             const l = localStorage.getItem('@finapp_limitesCategorias');
             if (l) setLimitesCategorias(prev => ({ ...prev, ...JSON.parse(l) }));
+            // Metas zeradas a pedido do usuário (uma única vez): remove as metas salvas neste aparelho.
+            if (!localStorage.getItem('@finapp_metas_zeradas')) {
+              localStorage.setItem('@finapp_metas', '[]');
+              localStorage.setItem('@finapp_metas_zeradas', '1');
+            }
             const m = localStorage.getItem('@finapp_metas');
             if (m) setMetas(JSON.parse(m));
           } catch (e) {}
@@ -286,9 +295,11 @@
         carregarDadosIniciais();
       }, []);
 
+      const timerNotificacao = useRef(null);
       const exibirNotificacao = (texto) => {
         setMensagemNotificacao(texto);
-        setTimeout(() => {
+        clearTimeout(timerNotificacao.current);
+        timerNotificacao.current = setTimeout(() => {
           setMensagemNotificacao(null);
         }, 3000);
       };
@@ -429,7 +440,7 @@
           amount: quantia,
           category: 'Outros',
           type: operacao === 'somar' ? 'gasto' : 'receita',
-          date: new Date().toISOString().split('T')[0]
+          date: hojeISO()
         };
 
         const novasTransacoes = [novaTransacao, ...transacoes].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -504,7 +515,7 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'backup-financeiro-' + new Date().toISOString().split('T')[0] + '.json';
+        a.download = 'backup-financeiro-' + hojeISO() + '.json';
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -586,9 +597,7 @@
           } : estilos.sidebar}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '36px' }}>
-                <div style={{ backgroundColor: 'var(--accent)', color: 'var(--on-accent)', padding: '10px', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 16px rgba(var(--accent-rgb), 0.3)' }}>
-                  <Wallet size={24} />
-                </div>
+                <img src="./logo.png" alt="Logo EDD" width="46" height="46" style={{ borderRadius: '14px', flexShrink: 0, boxShadow: '0 8px 16px rgba(59, 41, 152, 0.3)' }} />
                 <div>
                   <h1 style={{ fontSize: '20px', fontWeight: '800', margin: 0, color: 'var(--text-strong)' }}>EDD finanças</h1>
                   <p style={{ fontSize: '11px', color: 'var(--accent)', margin: 0, fontWeight: '600', textTransform: 'uppercase' }}>Gestão Financeira</p>
@@ -598,7 +607,7 @@
               <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {[
                   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-                  { id: 'orcamento', label: 'Orçamento', icon: PieChart },
+                  { id: 'orcamento', label: 'Planejamento', icon: PieChart },
                   { id: 'extrato', label: 'Extrato', icon: Receipt },
                   { id: 'metas', label: 'Metas', icon: Target },
                   { id: 'calendario', label: 'Calendário', icon: CalendarIcon }
@@ -655,7 +664,7 @@
 
             <div style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '12px' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Orçamento Usado</span>
+                <span style={{ color: 'var(--text-muted)' }}>Planejamento Usado</span>
                 <span style={{ color: percentualOrcamento >= 100 ? '#f43f5e' : 'var(--accent)', fontWeight: 'bold' }}>{percentualOrcamento.toFixed(0)}%</span>
               </div>
               <div style={{ width: '100%', backgroundColor: 'var(--border)', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
@@ -672,7 +681,7 @@
               )}
               <h2 style={{ fontSize: isMobile ? '15px' : '20px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0, ...(isMobile ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : {}) }}>
                 {abaAtiva === 'dashboard' && 'Visão Geral do Mês'}
-                {abaAtiva === 'orcamento' && 'Planejamento de Orçamento'}
+                {abaAtiva === 'orcamento' && 'Planejamento de Gastos'}
                 {abaAtiva === 'extrato' && 'Extrato de Lançamentos'}
                 {abaAtiva === 'metas' && 'Metas e Objetivos'}
                 {abaAtiva === 'calendario' && 'Calendário Anual Interativo'}
@@ -683,7 +692,7 @@
                   {salvando ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} 
                   {!isMobile && (salvando ? 'Salvando...' : 'Salvar Tudo')}
                 </button>
-                <button onClick={() => abrirModalComData(new Date().toISOString().split('T')[0])} style={isMobile ? { ...estilos.buttonPrimary, padding: '10px 12px' } : estilos.buttonPrimary} aria-label="Novo lançamento">
+                <button onClick={() => abrirModalComData(hojeISO())} style={isMobile ? { ...estilos.buttonPrimary, padding: '10px 12px' } : estilos.buttonPrimary} aria-label="Novo lançamento">
                   <PlusCircle size={20} /> {!isMobile && 'Novo Lançamento'}
                 </button>
               </div>
@@ -725,7 +734,7 @@
                     <div style={{ backgroundColor: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.4)', borderRadius: '16px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '16px', color: 'var(--danger-text)' }}>
                       <AlertTriangle size={24} />
                       <div>
-                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 'bold' }}>Alerta de Orçamento</h4>
+                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 'bold' }}>Alerta de Planejamento</h4>
                         <p style={{ margin: 0, fontSize: '12px', opacity: 0.9 }}>Você está muito próximo ou ultrapassou o teto total de gastos planejado.</p>
                       </div>
                     </div>
@@ -925,7 +934,7 @@
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '20px' }}>
                     {metas.length === 0 ? (
-                      <p style={{ color: 'var(--text-faint)', gridColumn: 'span 2', textAlign: 'center', padding: '40px 0' }}>Nenhuma meta criada.</p>
+                      <p style={{ color: 'var(--text-faint)', gridColumn: '1 / -1', textAlign: 'center', padding: '40px 0' }}>Nenhuma meta criada.</p>
                     ) : (
                       metas.map(meta => {
                         const progresso = meta.objetivo > 0 ? (meta.economizado / meta.objetivo) * 100 : 0;
@@ -1101,7 +1110,7 @@
                                     display: 'flex',
                                     flexDirection: 'column',
                                     alignItems: 'center',
-                                    justify: 'center',
+                                    justifyContent: 'center',
                                     position: 'relative',
                                     transition: '0.15s'
                                   }}
@@ -1236,9 +1245,29 @@
       );
     }
 
+    // Se algo der errado, mostra um aviso com botão de recarregar em vez de tela em branco.
+    // Os dados continuam salvos no aparelho.
+    class ProtecaoErro extends React.Component {
+      constructor(props) { super(props); this.state = { erro: null }; }
+      static getDerivedStateFromError(erro) { return { erro }; }
+      componentDidCatch(erro) { console.error('Erro no app:', erro); }
+      render() {
+        if (!this.state.erro) return this.props.children;
+        return (
+          <div style={{ minHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center' }}>
+            <div>
+              <h2 style={{ margin: '0 0 8px 0', color: 'var(--text-strong)' }}>Ops, algo deu errado.</h2>
+              <p style={{ margin: '0 0 20px 0', color: 'var(--text-muted)' }}>Seus dados continuam salvos neste aparelho.</p>
+              <button onClick={() => location.reload()} style={{ padding: '12px 20px', borderRadius: '12px', border: 'none', backgroundColor: 'var(--accent)', color: 'var(--on-accent)', fontWeight: 'bold', cursor: 'pointer' }}>Recarregar o app</button>
+            </div>
+          </div>
+        );
+      }
+    }
+
     const container = document.getElementById('root');
     const root = ReactDOM.createRoot(container);
-    root.render(<App />);
+    root.render(<ProtecaoErro><App /></ProtecaoErro>);
   </script>
 </body>
 </html>
