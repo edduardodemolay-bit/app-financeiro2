@@ -1,0 +1,31 @@
+COMO PUBLICAR NO GITHUB PAGES (passo a passo)
+
+1) Crie uma conta em github.com (se ainda nao tiver).
+2) Clique em "+" (canto superior direito) > "New repository".
+   - Nome: por exemplo  app-financeiro
+   - Marque "Public" e clique em "Create repository".
+3) Na pagina do repositorio, clique em "uploading an existing file".
+4) Arraste TODOS os arquivos desta pasta (inclusive .nojekyll, se aparecer)
+   para a pagina e clique em "Commit changes".
+   Os arquivos ficam na raiz do repositorio, sem pasta por cima.
+5) Va em Settings > Pages.
+   - Em "Source": Deploy from a branch
+   - Branch: main  /  pasta: (root)  > Save
+6) Aguarde 1 a 2 minutos. O endereco sera:
+   https://SEU-USUARIO.github.io/app-financeiro/
+
+INSTALAR NO CELULAR
+- Android (Chrome): abra o endereco > menu (3 pontos) > "Instalar app" ou "Adicionar a tela inicial".
+- iPhone (Safari): abra o endereco > botao Compartilhar > "Adicionar a Tela de Inicio".
+
+IMPORTANTE - SEUS DADOS
+- Os dados ficam salvos no proprio aparelho (navegador). O celular e o computador NAO
+  sincronizam entre si, e limpar os dados do navegador apaga tudo.
+- Use "Exportar backup" no menu lateral para guardar um arquivo .json e
+  "Importar backup" para levar os dados de um aparelho para outro.
+- Como o repositorio e publico, NUNCA coloque dados reais dentro dos arquivos do site.
+  Os seus lancamentos nao vao para o GitHub, ficam so no seu aparelho.
+
+PARA ATUALIZAR O SITE DEPOIS
+- Suba o novo index.html no repositorio (Add file > Upload files) e, no arquivo sw.js,
+  troque "edd-financas-v1" por "edd-financas-v2" para o celular pegar a versao nova.

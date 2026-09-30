@@ -3,6 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#10b981">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="EDD Finanças">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <link rel="icon" type="image/png" href="./icon-192.png">
   <title>EDD Finanças</title>
   
   <!-- Tailwind CSS para utilitários de animação -->
@@ -19,15 +26,65 @@
   <script src="https://unpkg.com/lucide@latest"></script>
 
   <style>
+    :root {
+      --accent: #10b981;
+      --accent-light: #34d399;
+      --accent-dark: #059669;
+      --accent-rgb: 16, 185, 129;
+      --accent-text: #059669;
+      /* ===== TEMA CLARO (padrão) ===== */
+      --bg: #f1f5f9;
+      --surface: #ffffff;
+      --card: #ffffff;
+      --border: #e2e8f0;
+      --border-strong: #cbd5e1;
+      --text: #1e293b;
+      --text-strong: #0f172a;
+      --text-muted: #64748b;
+      --text-faint: #94a3b8;
+      --text-soft: #475569;
+      --danger-text: #e11d48;
+      --on-accent: #ffffff;
+      --overlay: rgba(15, 23, 42, 0.45);
+      --c-sky: #0284c7; --c-amber: #d97706; --c-purple: #9333ea;
+      --c-indigo: #4f46e5; --c-blue: #2563eb; --c-teal: #0d9488;
+    }
+    /* ===== TEMA ESCURO (opcional) ===== */
+    :root[data-tema="escuro"] {
+      --bg: #090d16;
+      --surface: #0e1525;
+      --card: #121c33;
+      --border: #1e293b;
+      --border-strong: #334155;
+      --text: #f8fafc;
+      --text-strong: #ffffff;
+      --text-muted: #94a3b8;
+      --text-faint: #64748b;
+      --text-soft: #cbd5e1;
+      --danger-text: #fb7185;
+      --on-accent: #090d16;
+      --overlay: rgba(0, 0, 0, 0.75);
+      --c-sky: #38bdf8; --c-amber: #fbbf24; --c-purple: #c084fc;
+      --c-indigo: #818cf8; --c-blue: #60a5fa; --c-teal: #2dd4bf;
+    }
     * {
       box-sizing: border-box;
+    }
+    html { -webkit-text-size-adjust: 100%; }
+    @supports (height: 100dvh) {
+      .app-root { height: 100dvh !important; }
+    }
+    button { -webkit-tap-highlight-color: transparent; }
+    @media (max-width: 767px) {
+      /* 16px evita o zoom automático do iPhone ao tocar nos campos */
+      input, select, textarea { font-size: 16px !important; }
     }
     body, html {
       margin: 0;
       padding: 0;
       height: 100%;
-      background-color: #090d16;
-      color: #f8fafc;
+      background-color: var(--bg);
+      color: var(--text);
       font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     }
   </style>
@@ -35,6 +92,14 @@
 <body>
 
   <div id="root"></div>
+
+  <script>
+    if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js').catch(function () {});
+      });
+    }
+  </script>
 
   <script type="text/babel">
     const { useState, useEffect } = React;
@@ -80,15 +145,15 @@
     const CATEGORIAS = ['Salário', 'Vendas', 'Alimentação', 'Transporte', 'Moradia', 'Lazer', 'Saúde', 'Educação', 'Outros'];
 
     const CATEGORIA_CORES = {
-      'Salário': { bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: 'rgba(16, 185, 129, 0.3)' },
-      'Vendas': { bg: 'rgba(20, 184, 166, 0.15)', color: '#2dd4bf', border: 'rgba(20, 184, 166, 0.3)' },
-      'Alimentação': { bg: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: 'rgba(245, 158, 11, 0.3)' },
-      'Transporte': { bg: 'rgba(14, 165, 233, 0.15)', color: '#38bdf8', border: 'rgba(14, 165, 233, 0.3)' },
-      'Moradia': { bg: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', border: 'rgba(99, 102, 241, 0.3)' },
-      'Lazer': { bg: 'rgba(168, 85, 247, 0.15)', color: '#c084fc', border: 'rgba(168, 85, 247, 0.3)' },
-      'Saúde': { bg: 'rgba(244, 63, 94, 0.15)', color: '#fb7185', border: 'rgba(244, 63, 94, 0.3)' },
-      'Educação': { bg: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: 'rgba(59, 130, 246, 0.3)' },
-      'Outros': { bg: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8', border: 'rgba(148, 163, 184, 0.3)' }
+      'Salário': { bg: 'rgba(var(--accent-rgb), 0.15)', color: 'var(--accent-text)', border: 'rgba(var(--accent-rgb), 0.3)' },
+      'Vendas': { bg: 'rgba(20, 184, 166, 0.15)', color: 'var(--c-teal)', border: 'rgba(20, 184, 166, 0.3)' },
+      'Alimentação': { bg: 'rgba(245, 158, 11, 0.15)', color: 'var(--c-amber)', border: 'rgba(245, 158, 11, 0.3)' },
+      'Transporte': { bg: 'rgba(14, 165, 233, 0.15)', color: 'var(--c-sky)', border: 'rgba(14, 165, 233, 0.3)' },
+      'Moradia': { bg: 'rgba(99, 102, 241, 0.15)', color: 'var(--c-indigo)', border: 'rgba(99, 102, 241, 0.3)' },
+      'Lazer': { bg: 'rgba(168, 85, 247, 0.15)', color: 'var(--c-purple)', border: 'rgba(168, 85, 247, 0.3)' },
+      'Saúde': { bg: 'rgba(244, 63, 94, 0.15)', color: 'var(--danger-text)', border: 'rgba(244, 63, 94, 0.3)' },
+      'Educação': { bg: 'rgba(59, 130, 246, 0.15)', color: 'var(--c-blue)', border: 'rgba(59, 130, 246, 0.3)' },
+      'Outros': { bg: 'rgba(148, 163, 184, 0.15)', color: 'var(--text-muted)', border: 'rgba(148, 163, 184, 0.3)' }
     };
 
     const NOMES_MESES = [
@@ -119,6 +184,46 @@
       const [valoresAporte, setValoresAporte] = useState({});
 
       const [abaAtiva, setAbaAtiva] = useState('dashboard');
+
+      // ===== TEMA / COR DE DESTAQUE =====
+      const TEMAS = {
+        verde:   { hex: '#10b981', light: '#34d399', dark: '#059669', rgb: '16, 185, 129' },
+        azul:    { hex: '#3b82f6', light: 'var(--c-blue)', dark: '#1d4ed8', rgb: '59, 130, 246' },
+        roxo:    { hex: '#8b5cf6', light: '#a78bfa', dark: '#6d28d9', rgb: '139, 92, 246' },
+        rosa:    { hex: '#ec4899', light: '#f472b6', dark: '#be185d', rgb: '236, 72, 153' },
+        laranja: { hex: '#f97316', light: '#fb923c', dark: '#c2410c', rgb: '249, 115, 22' }
+      };
+      const [corTema, setCorTema] = useState(() => {
+        try { return localStorage.getItem('@finapp_cor') || 'verde'; } catch (e) { return 'verde'; }
+      });
+      const [modoTema, setModoTema] = useState(() => {
+        try { return localStorage.getItem('@finapp_modo') || 'claro'; } catch (e) { return 'claro'; }
+      });
+      useEffect(() => {
+        const t = TEMAS[corTema] || TEMAS.verde;
+        const root = document.documentElement;
+        root.setAttribute('data-tema', modoTema);
+        root.style.setProperty('--accent', t.hex);
+        root.style.setProperty('--accent-light', t.light);
+        root.style.setProperty('--accent-dark', t.dark);
+        root.style.setProperty('--accent-rgb', t.rgb);
+        root.style.setProperty('--accent-text', modoTema === 'escuro' ? t.light : t.dark);
+        try {
+          localStorage.setItem('@finapp_cor', corTema);
+          localStorage.setItem('@finapp_modo', modoTema);
+        } catch (e) {}
+      }, [corTema, modoTema]);
+      const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+      const [menuAberto, setMenuAberto] = useState(false);
+      useEffect(() => {
+        const aoRedimensionar = () => {
+          const m = window.innerWidth < 768;
+          setIsMobile(m);
+          if (!m) setMenuAberto(false);
+        };
+        window.addEventListener('resize', aoRedimensionar);
+        return () => window.removeEventListener('resize', aoRedimensionar);
+      }, []);
       const [filtroTipo, setFiltroTipo] = useState('todas');
       const [filtroCategoria, setFiltroCategoria] = useState('todas');
       const [termoPesquisa, setTermoPesquisa] = useState('');
@@ -368,13 +473,13 @@
       };
 
       const renderCorTipo = (t) => {
-        if (t === 'receita') return '#34d399';
-        if (t === 'despesa') return '#fb7185';
+        if (t === 'receita') return 'var(--accent-text)';
+        if (t === 'despesa') return 'var(--danger-text)';
         return '#f59e0b';
       };
 
       const renderBgTipo = (t) => {
-        if (t === 'receita') return 'rgba(16, 185, 129, 0.15)';
+        if (t === 'receita') return 'rgba(var(--accent-rgb), 0.15)';
         if (t === 'despesa') return 'rgba(244, 63, 94, 0.15)';
         return 'rgba(245, 158, 11, 0.15)';
       };
@@ -393,29 +498,67 @@
 
       const transacoesDiaSelecionado = transacoes.filter(t => t.date === diaSelecionado);
 
+      const exportarDados = () => {
+        const dados = { versao: 1, exportadoEm: new Date().toISOString(), transacoes, limitesCategorias, metas };
+        const blob = new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'backup-financeiro-' + new Date().toISOString().split('T')[0] + '.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        exibirNotificacao('📤 Backup exportado!');
+      };
+
+      const importarDados = (e) => {
+        const arquivo = e.target.files && e.target.files[0];
+        if (!arquivo) return;
+        const leitor = new FileReader();
+        leitor.onload = () => {
+          try {
+            const d = JSON.parse(leitor.result);
+            if (!d || !Array.isArray(d.transacoes)) throw new Error('formato invalido');
+            if (!window.confirm('Isso vai substituir os dados atuais deste aparelho. Continuar?')) return;
+            const limites = d.limitesCategorias ? { ...limitesCategorias, ...d.limitesCategorias } : limitesCategorias;
+            const novasMetas = Array.isArray(d.metas) ? d.metas : metas;
+            setTransacoes(d.transacoes);
+            setLimitesCategorias(limites);
+            setMetas(novasMetas);
+            salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas });
+            exibirNotificacao('📥 Dados importados com sucesso!');
+          } catch (err) {
+            exibirNotificacao('❌ Arquivo de backup inválido.');
+          }
+        };
+        leitor.readAsText(arquivo);
+        e.target.value = '';
+      };
+
       const estilos = {
-        container: { display: 'flex', height: '100vh', backgroundColor: '#090d16', color: '#f8fafc', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' },
-        sidebar: { width: '270px', backgroundColor: '#0e1525', borderRight: '1px solid #1e293b', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '24px' },
+        container: { display: 'flex', height: '100vh', backgroundColor: 'var(--bg)', color: 'var(--text)', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' },
+        sidebar: { width: '270px', backgroundColor: 'var(--surface)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '24px' },
         main: { flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' },
-        header: { height: '80px', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 32px', backgroundColor: '#0e1525', position: 'sticky', top: 0, zIndex: 20 },
-        card: { backgroundColor: '#121c33', border: '1px solid #1e293b', borderRadius: '16px', padding: '24px', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)' },
-        buttonPrimary: { background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#090d16', padding: '12px 20px', borderRadius: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)' },
+        header: { height: '80px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 32px', backgroundColor: 'var(--surface)', position: 'sticky', top: 0, zIndex: 20 },
+        card: { backgroundColor: 'var(--card)', border: '1px solid var(--border)', borderRadius: '16px', padding: isMobile ? '16px' : '24px', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)' },
+        buttonPrimary: { background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%)', color: 'var(--on-accent)', padding: '12px 20px', borderRadius: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 12px rgba(var(--accent-rgb), 0.25)' },
         buttonSave: { background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)', color: '#ffffff', padding: '12px 20px', borderRadius: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 12px rgba(59, 130, 246, 0.25)' },
-        input: { width: '100%', backgroundColor: '#090d16', border: '1px solid #334155', borderRadius: '12px', padding: '12px 16px', color: '#f8fafc', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
-        modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 50 },
-        modalContent: { backgroundColor: '#0e1525', border: '1px solid #1e293b', borderRadius: '20px', width: '100%', maxWidth: '450px', padding: '32px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }
+        input: { width: '100%', backgroundColor: 'var(--bg)', border: '1px solid var(--border-strong)', borderRadius: '12px', padding: '12px 16px', color: 'var(--text)', fontSize: '14px', outline: 'none', boxSizing: 'border-box' },
+        modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'var(--overlay)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 50 },
+        modalContent: { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '20px', width: '100%', maxWidth: '450px', maxHeight: '90vh', overflowY: 'auto', padding: isMobile ? '20px' : '32px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }
       };
 
       return (
-        <div style={estilos.container}>
+        <div className="app-root" style={estilos.container}>
 
           {mensagemNotificacao && (
             <div style={{
               position: 'fixed',
               top: '20px',
               right: '20px',
-              backgroundColor: '#10b981',
-              color: '#090d16',
+              backgroundColor: 'var(--accent)',
+              color: 'var(--on-accent)',
               padding: '12px 20px',
               borderRadius: '12px',
               fontWeight: 'bold',
@@ -429,15 +572,26 @@
             </div>
           )}
 
-          <aside style={estilos.sidebar}>
+          {isMobile && menuAberto && (
+            <div onClick={() => setMenuAberto(false)} style={{ position: 'fixed', inset: 0, backgroundColor: 'var(--overlay)', zIndex: 55 }} />
+          )}
+
+          <aside style={isMobile ? {
+            ...estilos.sidebar,
+            position: 'fixed', top: 0, left: 0, bottom: 0, width: '280px', maxWidth: '85vw', zIndex: 60,
+            overflowY: 'auto', gap: '24px',
+            transform: menuAberto ? 'translateX(0)' : 'translateX(-105%)',
+            transition: 'transform 0.25s ease',
+            boxShadow: menuAberto ? '0 0 40px rgba(0,0,0,0.35)' : 'none'
+          } : estilos.sidebar}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '36px' }}>
-                <div style={{ backgroundColor: '#10b981', color: '#090d16', padding: '10px', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 16px rgba(16,185,129,0.3)' }}>
+                <div style={{ backgroundColor: 'var(--accent)', color: 'var(--on-accent)', padding: '10px', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 16px rgba(var(--accent-rgb), 0.3)' }}>
                   <Wallet size={24} />
                 </div>
                 <div>
-                  <h1 style={{ fontSize: '20px', fontWeight: '800', margin: 0, color: '#ffffff' }}>EDD finanças</h1>
-                  <p style={{ fontSize: '11px', color: '#10b981', margin: 0, fontWeight: '600', textTransform: 'uppercase' }}>Gestão Financeira</p>
+                  <h1 style={{ fontSize: '20px', fontWeight: '800', margin: 0, color: 'var(--text-strong)' }}>EDD finanças</h1>
+                  <p style={{ fontSize: '11px', color: 'var(--accent)', margin: 0, fontWeight: '600', textTransform: 'uppercase' }}>Gestão Financeira</p>
                 </div>
               </div>
 
@@ -454,11 +608,11 @@
                   return (
                     <button 
                       key={item.id}
-                      onClick={() => setAbaAtiva(item.id)}
+                      onClick={() => { setAbaAtiva(item.id); setMenuAberto(false); }}
                       style={{
                         display: 'flex', alignItems: 'center', gap: '14px', width: '100%', padding: '14px 16px', borderRadius: '12px', fontWeight: ativo ? '700' : '500',
-                        backgroundColor: ativo ? '#10b981' : 'transparent', color: ativo ? '#090d16' : '#94a3b8', border: 'none', cursor: 'pointer', transition: '0.2s',
-                        boxShadow: ativo ? '0 4px 12px rgba(16,185,129,0.3)' : 'none'
+                        backgroundColor: ativo ? 'var(--accent)' : 'transparent', color: ativo ? 'var(--on-accent)' : 'var(--text-muted)', border: 'none', cursor: 'pointer', transition: '0.2s',
+                        boxShadow: ativo ? '0 4px 12px rgba(var(--accent-rgb), 0.3)' : 'none'
                       }}
                     >
                       <Icon size={20} /> {item.label}
@@ -466,73 +620,109 @@
                   );
                 })}
               </nav>
+
+              <div style={{ marginTop: '28px' }}>
+                <button
+                  onClick={() => setModoTema(modoTema === 'claro' ? 'escuro' : 'claro')}
+                  style={{ width: '100%', marginBottom: '18px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}
+                >
+                  {modoTema === 'claro' ? '🌙 Mudar para tema escuro' : '☀️ Mudar para tema claro'}
+                </button>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 10px 0', fontWeight: '600', textTransform: 'uppercase' }}>Cor do tema</p>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  {Object.entries(TEMAS).map(([nome, t]) => (
+                    <button
+                      key={nome}
+                      title={nome}
+                      onClick={() => setCorTema(nome)}
+                      style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: t.hex, cursor: 'pointer', border: corTema === nome ? '3px solid var(--text-strong)' : '3px solid transparent', padding: 0 }}
+                    />
+                  ))}
+                </div>
+
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '22px 0 10px 0', fontWeight: '600', textTransform: 'uppercase' }}>Backup dos dados</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <button onClick={exportarDados} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>
+                    📤 Exportar backup
+                  </button>
+                  <label style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer', textAlign: 'center', display: 'block' }}>
+                    📥 Importar backup
+                    <input type="file" accept="application/json,.json" onChange={importarDados} style={{ display: 'none' }} />
+                  </label>
+                </div>
+              </div>
             </div>
 
-            <div style={{ backgroundColor: '#090d16', border: '1px solid #1e293b', borderRadius: '14px', padding: '16px' }}>
+            <div style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '12px' }}>
-                <span style={{ color: '#94a3b8' }}>Orçamento Usado</span>
-                <span style={{ color: percentualOrcamento >= 100 ? '#f43f5e' : '#10b981', fontWeight: 'bold' }}>{percentualOrcamento.toFixed(0)}%</span>
+                <span style={{ color: 'var(--text-muted)' }}>Orçamento Usado</span>
+                <span style={{ color: percentualOrcamento >= 100 ? '#f43f5e' : 'var(--accent)', fontWeight: 'bold' }}>{percentualOrcamento.toFixed(0)}%</span>
               </div>
-              <div style={{ width: '100%', backgroundColor: '#1e293b', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
-                <div style={{ width: `${Math.min(100, percentualOrcamento)}%`, backgroundColor: percentualOrcamento >= 100 ? '#f43f5e' : '#10b981', height: '100%', borderRadius: '999px' }}></div>
+              <div style={{ width: '100%', backgroundColor: 'var(--border)', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(100, percentualOrcamento)}%`, backgroundColor: percentualOrcamento >= 100 ? '#f43f5e' : 'var(--accent)', height: '100%', borderRadius: '999px' }}></div>
               </div>
             </div>
           </aside>
 
           <main style={estilos.main}>
-            <header style={estilos.header}>
-              <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#ffffff', margin: 0 }}>
+            <header style={isMobile ? { ...estilos.header, height: 'auto', minHeight: '60px', padding: '10px 12px', gap: '8px' } : estilos.header}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+              {isMobile && (
+                <button onClick={() => setMenuAberto(true)} aria-label="Abrir menu" style={{ flexShrink: 0, width: '40px', height: '40px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontSize: '20px', cursor: 'pointer', lineHeight: 1 }}>☰</button>
+              )}
+              <h2 style={{ fontSize: isMobile ? '15px' : '20px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0, ...(isMobile ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : {}) }}>
                 {abaAtiva === 'dashboard' && 'Visão Geral do Mês'}
                 {abaAtiva === 'orcamento' && 'Planejamento de Orçamento'}
                 {abaAtiva === 'extrato' && 'Extrato de Lançamentos'}
                 {abaAtiva === 'metas' && 'Metas e Objetivos'}
                 {abaAtiva === 'calendario' && 'Calendário Anual Interativo'}
               </h2>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button onClick={handleSalvarTudoManual} style={estilos.buttonSave} title="Salvar tudo permanentemente sem parar o app">
+              </div>
+              <div style={{ display: 'flex', gap: isMobile ? '8px' : '12px', flexShrink: 0 }}>
+                <button onClick={handleSalvarTudoManual} style={isMobile ? { ...estilos.buttonSave, padding: '10px 12px' } : estilos.buttonSave} aria-label="Salvar tudo" title="Salvar tudo permanentemente sem parar o app">
                   {salvando ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} 
-                  {salvando ? 'Salvando...' : 'Salvar Tudo'}
+                  {!isMobile && (salvando ? 'Salvando...' : 'Salvar Tudo')}
                 </button>
-                <button onClick={() => abrirModalComData(new Date().toISOString().split('T')[0])} style={estilos.buttonPrimary}>
-                  <PlusCircle size={20} /> Novo Lançamento
+                <button onClick={() => abrirModalComData(new Date().toISOString().split('T')[0])} style={isMobile ? { ...estilos.buttonPrimary, padding: '10px 12px' } : estilos.buttonPrimary} aria-label="Novo lançamento">
+                  <PlusCircle size={20} /> {!isMobile && 'Novo Lançamento'}
                 </button>
               </div>
             </header>
 
-            <div style={{ padding: '32px', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+            <div style={{ padding: isMobile ? '14px' : '32px', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
               
               {abaAtiva === 'dashboard' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '20px' }}>
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Saldo Total</p>
-                      <h3 style={{ fontSize: '28px', fontWeight: '800', color: saldoTotal >= 0 ? '#34d399' : '#fb7185', margin: 0 }}>{formatarMoeda(saldoTotal)}</h3>
-                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Sparkles size={12} color="#10b981" /> Atualizado em tempo real
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Saldo Total</p>
+                      <h3 style={{ fontSize: '28px', fontWeight: '800', color: saldoTotal >= 0 ? 'var(--accent-text)' : 'var(--danger-text)', margin: 0 }}>{formatarMoeda(saldoTotal)}</h3>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Sparkles size={12} color="var(--accent)" /> Atualizado em tempo real
                       </p>
                     </div>
 
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Receitas</p>
-                      <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#34d399', margin: 0 }}>{formatarMoeda(totalReceitas)}</h3>
-                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Salários, Vendas e Entradas</p>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Receitas</p>
+                      <h3 style={{ fontSize: '24px', fontWeight: '700', color: 'var(--accent-text)', margin: 0 }}>{formatarMoeda(totalReceitas)}</h3>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Salários, Vendas e Entradas</p>
                     </div>
 
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Despesas (Fixas)</p>
-                      <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#fb7185', margin: 0 }}>{formatarMoeda(totalDespesas)}</h3>
-                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Contas essenciais</p>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Despesas (Fixas)</p>
+                      <h3 style={{ fontSize: '24px', fontWeight: '700', color: 'var(--danger-text)', margin: 0 }}>{formatarMoeda(totalDespesas)}</h3>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Contas essenciais</p>
                     </div>
 
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Gastos (Variáveis)</p>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Gastos (Variáveis)</p>
                       <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#f59e0b', margin: 0 }}>{formatarMoeda(totalGastos)}</h3>
-                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Extras / Aportes</p>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Extras / Aportes</p>
                     </div>
                   </div>
 
                   {percentualOrcamento >= 90 && (
-                    <div style={{ backgroundColor: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.4)', borderRadius: '16px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '16px', color: '#fb7185' }}>
+                    <div style={{ backgroundColor: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.4)', borderRadius: '16px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '16px', color: 'var(--danger-text)' }}>
                       <AlertTriangle size={24} />
                       <div>
                         <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 'bold' }}>Alerta de Orçamento</h4>
@@ -542,27 +732,27 @@
                   )}
 
                   <div style={estilos.card}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 20px 0' }}>Últimos Lançamentos</h3>
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Últimos Lançamentos</h3>
                     {transacoes.length === 0 ? (
-                      <p style={{ color: '#64748b', textAlign: 'center', padding: '24px 0', fontSize: '14px' }}>Nenhum lançamento registrado no extrato.</p>
+                      <p style={{ color: 'var(--text-faint)', textAlign: 'center', padding: '24px 0', fontSize: '14px' }}>Nenhum lançamento registrado no extrato.</p>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         {transacoes.slice(0, 5).map(t => {
-                          const cfg = CATEGORIA_CORES[t.category] || { bg: '#1e293b', color: '#cbd5e1', border: '#334155' };
+                          const cfg = CATEGORIA_CORES[t.category] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
                           return (
-                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#090d16', border: '1px solid #1e293b', padding: '14px 18px', borderRadius: '12px' }}>
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', padding: '14px 18px', borderRadius: '12px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                                 <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
                                   {renderIconeTipo(t.type)}
                                 </div>
                                 <div>
-                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: '#f8fafc', fontSize: '14px' }}>{t.description}</p>
+                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px' }}>{t.description}</p>
                                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type), fontWeight: '700', textTransform: 'uppercase' }}>
                                       {t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto'}
                                     </span>
-                                    <span style={{ fontSize: '11px', color: '#64748b' }}>{formatarDataBR(t.date)}</span>
+                                    <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)}</span>
                                   </div>
                                 </div>
                               </div>
@@ -580,47 +770,47 @@
 
               {abaAtiva === 'orcamento' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '20px' }}>
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Teto Planejado</p>
-                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: '#38bdf8', margin: 0 }}>{formatarMoeda(orcamentoTotalPlanejado)}</h3>
-                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Soma das categorias de saída</p>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Teto Planejado</p>
+                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: 'var(--c-sky)', margin: 0 }}>{formatarMoeda(orcamentoTotalPlanejado)}</h3>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Soma das categorias de saída</p>
                     </div>
 
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Total Consumido</p>
-                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: totalGastoGeral > orcamentoTotalPlanejado ? '#fb7185' : '#f59e0b', margin: 0 }}>{formatarMoeda(totalGastoGeral)}</h3>
-                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>Despesas + Gastos</p>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Total Consumido</p>
+                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: totalGastoGeral > orcamentoTotalPlanejado ? 'var(--danger-text)' : '#f59e0b', margin: 0 }}>{formatarMoeda(totalGastoGeral)}</h3>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Despesas + Gastos</p>
                     </div>
 
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Disponível</p>
-                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: saldoRestanteGeral >= 0 ? '#34d399' : '#fb7185', margin: 0 }}>{formatarMoeda(saldoRestanteGeral)}</h3>
-                      <p style={{ fontSize: '11px', color: '#64748b', margin: '8px 0 0 0' }}>{saldoRestanteGeral >= 0 ? 'Dentro da meta' : 'Excedido'}</p>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Disponível</p>
+                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: saldoRestanteGeral >= 0 ? 'var(--accent-text)' : 'var(--danger-text)', margin: 0 }}>{formatarMoeda(saldoRestanteGeral)}</h3>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>{saldoRestanteGeral >= 0 ? 'Dentro da meta' : 'Excedido'}</p>
                     </div>
                   </div>
 
                   <div style={estilos.card}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                       <div>
-                        <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: 0 }}>Planejamento de Saídas por Categoria</h3>
-                        <p style={{ fontSize: '12px', color: '#94a3b8', margin: '4px 0 0 0' }}>Defina e controle o teto de despesas e gastos das categorias de saída</p>
+                        <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0 }}>Planejamento de Saídas por Categoria</h3>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Defina e controle o teto de despesas e gastos das categorias de saída</p>
                       </div>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: '20px' }}>
                       {categoriasDeGastos.map(cat => {
                         const limite = limitesCategorias[cat] || 0;
                         const gasto = gastosPorCategoria[cat] || 0;
                         const pct = limite > 0 ? (gasto / limite) * 100 : 0;
-                        const cfg = CATEGORIA_CORES[cat] || { bg: '#1e293b', color: '#cbd5e1', border: '#334155' };
+                        const cfg = CATEGORIA_CORES[cat] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
 
-                        let corStatus = '#10b981';
+                        let corStatus = 'var(--accent)';
                         if (pct >= 80 && pct < 100) corStatus = '#f59e0b';
                         if (pct >= 100) corStatus = '#f43f5e';
 
                         return (
-                          <div key={cat} style={{ backgroundColor: '#090d16', border: '1px solid #1e293b', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                          <div key={cat} style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '8px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '700' }}>
                                 {cat}
@@ -631,7 +821,7 @@
                                   setNovoLimiteCategoria(limite);
                                   setModalOrcamentoAberto(true);
                                 }}
-                                style={{ background: 'none', border: 'none', color: '#38bdf8', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                style={{ background: 'none', border: 'none', color: 'var(--c-sky)', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                               >
                                 <Sliders size={14} /> Ajustar
                               </button>
@@ -639,21 +829,21 @@
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                               <div>
-                                <span style={{ fontSize: '20px', fontWeight: '800', color: '#ffffff' }}>{formatarMoeda(gasto)}</span>
-                                <span style={{ fontSize: '12px', color: '#64748b', marginLeft: '6px' }}>/ {formatarMoeda(limite)}</span>
+                                <span style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text-strong)' }}>{formatarMoeda(gasto)}</span>
+                                <span style={{ fontSize: '12px', color: 'var(--text-faint)', marginLeft: '6px' }}>/ {formatarMoeda(limite)}</span>
                               </div>
                               <span style={{ fontSize: '12px', fontWeight: 'bold', color: corStatus }}>
                                 {pct.toFixed(0)}%
                               </span>
                             </div>
 
-                            <div style={{ width: '100%', backgroundColor: '#1e293b', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
+                            <div style={{ width: '100%', backgroundColor: 'var(--border)', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
                               <div style={{ width: `${Math.min(100, pct)}%`, backgroundColor: corStatus, height: '100%', borderRadius: '999px', transition: 'width 0.3s ease' }}></div>
                             </div>
 
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#64748b' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-faint)' }}>
                               <span>{limite - gasto >= 0 ? 'Resta:' : 'Excedido:'}</span>
-                              <strong style={{ color: limite - gasto >= 0 ? '#34d399' : '#fb7185' }}>{formatarMoeda(Math.abs(limite - gasto))}</strong>
+                              <strong style={{ color: limite - gasto >= 0 ? 'var(--accent-text)' : 'var(--danger-text)' }}>{formatarMoeda(Math.abs(limite - gasto))}</strong>
                             </div>
                           </div>
                         );
@@ -667,7 +857,7 @@
               {abaAtiva === 'extrato' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                   <div style={estilos.card}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '16px' }}>
                       <input type="text" placeholder="Pesquisar descrição..." value={termoPesquisa} onChange={e => setTermoPesquisa(e.target.value)} style={estilos.input} />
                       <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} style={estilos.input}>
                         <option value="todas">Todos os Tipos</option>
@@ -683,27 +873,27 @@
                   </div>
 
                   <div style={estilos.card}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 20px 0' }}>Extrato Completo ({transacoesFiltradas.length})</h3>
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Extrato Completo ({transacoesFiltradas.length})</h3>
                     {transacoesFiltradas.length === 0 ? (
-                      <p style={{ color: '#64748b', textAlign: 'center', padding: '32px 0' }}>Nenhum lançamento encontrado no extrato.</p>
+                      <p style={{ color: 'var(--text-faint)', textAlign: 'center', padding: '32px 0' }}>Nenhum lançamento encontrado no extrato.</p>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         {transacoesFiltradas.map(t => {
-                          const cfg = CATEGORIA_CORES[t.category] || { bg: '#1e293b', color: '#cbd5e1', border: '#334155' };
+                          const cfg = CATEGORIA_CORES[t.category] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
                           return (
-                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#090d16', border: '1px solid #1e293b', padding: '14px 18px', borderRadius: '12px' }}>
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', padding: '14px 18px', borderRadius: '12px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                                 <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
                                   {renderIconeTipo(t.type)}
                                 </div>
                                 <div>
-                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: '#f8fafc', fontSize: '14px' }}>{t.description}</p>
+                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px' }}>{t.description}</p>
                                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type), fontWeight: '700', textTransform: 'uppercase' }}>
                                       {t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto'}
                                     </span>
-                                    <span style={{ fontSize: '11px', color: '#64748b' }}>{formatarDataBR(t.date)}</span>
+                                    <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)}</span>
                                   </div>
                                 </div>
                               </div>
@@ -711,7 +901,7 @@
                                 <span style={{ fontWeight: 'bold', fontSize: '15px', color: renderCorTipo(t.type) }}>
                                   {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
                                 </span>
-                                <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }} title="Excluir">
+                                <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer' }} title="Excluir">
                                   <Trash2 size={18} />
                                 </button>
                               </div>
@@ -727,15 +917,15 @@
               {abaAtiva === 'metas' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: 0 }}>Metas e Objetivos</h3>
+                    <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0 }}>Metas e Objetivos</h3>
                     <button onClick={() => setModalMetaAberto(true)} style={estilos.buttonPrimary}>
                       <PlusCircle size={18} /> Nova Meta
                     </button>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '20px' }}>
                     {metas.length === 0 ? (
-                      <p style={{ color: '#64748b', gridColumn: 'span 2', textAlign: 'center', padding: '40px 0' }}>Nenhuma meta criada.</p>
+                      <p style={{ color: 'var(--text-faint)', gridColumn: 'span 2', textAlign: 'center', padding: '40px 0' }}>Nenhuma meta criada.</p>
                     ) : (
                       metas.map(meta => {
                         const progresso = meta.objetivo > 0 ? (meta.economizado / meta.objetivo) * 100 : 0;
@@ -744,32 +934,32 @@
                           <div key={meta.id} style={estilos.card}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px' }}>
                               <div>
-                                <h4 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold', color: '#ffffff' }}>{meta.nome}</h4>
-                                <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>Objetivo: <strong style={{ color: '#34d399' }}>{formatarMoeda(meta.objetivo)}</strong></p>
+                                <h4 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)' }}>{meta.nome}</h4>
+                                <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>Objetivo: <strong style={{ color: 'var(--accent-text)' }}>{formatarMoeda(meta.objetivo)}</strong></p>
                               </div>
-                              <button onClick={() => excluirMeta(meta.id)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }} title="Excluir Meta">
+                              <button onClick={() => excluirMeta(meta.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer' }} title="Excluir Meta">
                                 <Trash2 size={16} />
                               </button>
                             </div>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold' }}>
-                                <span style={{ color: '#94a3b8' }}>Guardado: {formatarMoeda(meta.economizado)}</span>
-                                <span style={{ color: concluida ? '#34d399' : '#cbd5e1' }}>{progresso.toFixed(0)}%</span>
+                                <span style={{ color: 'var(--text-muted)' }}>Guardado: {formatarMoeda(meta.economizado)}</span>
+                                <span style={{ color: concluida ? 'var(--accent-text)' : 'var(--text-soft)' }}>{progresso.toFixed(0)}%</span>
                               </div>
-                              <div style={{ width: '100%', backgroundColor: '#090d16', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
-                                <div style={{ width: `${Math.min(100, progresso)}%`, backgroundColor: '#10b981', height: '100%', borderRadius: '999px' }}></div>
+                              <div style={{ width: '100%', backgroundColor: 'var(--bg)', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
+                                <div style={{ width: `${Math.min(100, progresso)}%`, backgroundColor: 'var(--accent)', height: '100%', borderRadius: '999px' }}></div>
                               </div>
                             </div>
 
                             {concluida && (
-                              <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '10px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                              <div style={{ backgroundColor: 'rgba(var(--accent-rgb), 0.15)', color: 'var(--accent-text)', padding: '10px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
                                 <CheckCircle2 size={16} /> Meta concluída com sucesso!
                               </div>
                             )}
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '12px', borderTop: '1px solid #1e293b' }}>
-                              <span style={{ fontSize: '12px', color: '#94a3b8' }}>Movimentar valor da meta:</span>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '12px', borderTop: '1px solid var(--border)' }}>
+                              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Movimentar valor da meta:</span>
                               <div style={{ display: 'flex', gap: '8px' }}>
                                 <input 
                                   type="number" 
@@ -781,14 +971,14 @@
                                 />
                                 <button 
                                   onClick={() => alterarValorMeta(meta.id, 'somar')} 
-                                  style={{ backgroundColor: '#10b981', color: '#090d16', border: 'none', borderRadius: '8px', padding: '0 10px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
+                                  style={{ backgroundColor: 'var(--accent)', color: 'var(--on-accent)', border: 'none', borderRadius: '8px', padding: '0 10px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
                                   title="Adicionar à meta"
                                 >
                                   <Plus size={14} /> Aporte
                                 </button>
                                 <button 
                                   onClick={() => alterarValorMeta(meta.id, 'subtrair')} 
-                                  style={{ backgroundColor: 'rgba(244, 63, 94, 0.2)', color: '#fb7185', border: '1px solid rgba(244, 63, 94, 0.4)', borderRadius: '8px', padding: '0 10px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
+                                  style={{ backgroundColor: 'rgba(244, 63, 94, 0.2)', color: 'var(--danger-text)', border: '1px solid rgba(244, 63, 94, 0.4)', borderRadius: '8px', padding: '0 10px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
                                   title="Retirar da meta"
                                 >
                                   <Minus size={14} /> Retirar
@@ -806,21 +996,21 @@
               {abaAtiva === 'calendario' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
                   
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#121c33', padding: '20px 24px', borderRadius: '16px', border: '1px solid #1e293b' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--card)', padding: '20px 24px', borderRadius: '16px', border: '1px solid var(--border)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                      <button onClick={() => setAnoCalendario(anoCalendario - 1)} style={{ backgroundColor: '#090d16', border: '1px solid #1e293b', color: '#ffffff', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                      <button onClick={() => setAnoCalendario(anoCalendario - 1)} style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-strong)', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
                         <ChevronLeft size={20} />
                       </button>
-                      <h3 style={{ fontSize: '22px', fontWeight: '800', margin: 0, color: '#10b981' }}>{anoCalendario}</h3>
-                      <button onClick={() => setAnoCalendario(anoCalendario + 1)} style={{ backgroundColor: '#090d16', border: '1px solid #1e293b', color: '#ffffff', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                      <h3 style={{ fontSize: '22px', fontWeight: '800', margin: 0, color: 'var(--accent)' }}>{anoCalendario}</h3>
+                      <button onClick={() => setAnoCalendario(anoCalendario + 1)} style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-strong)', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
                         <ChevronRight size={20} />
                       </button>
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                       <div style={{ textAlign: 'right' }}>
-                        <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>Dia Selecionado:</p>
-                        <strong style={{ fontSize: '16px', color: '#ffffff' }}>{formatarDataBR(diaSelecionado)}</strong>
+                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>Dia Selecionado:</p>
+                        <strong style={{ fontSize: '16px', color: 'var(--text-strong)' }}>{formatarDataBR(diaSelecionado)}</strong>
                       </div>
                       <button onClick={() => abrirModalComData(diaSelecionado)} style={{ ...estilos.buttonPrimary, padding: '10px 16px', fontSize: '13px' }}>
                         <Plus size={16} /> Lançar neste dia
@@ -829,23 +1019,23 @@
                   </div>
 
                   <div style={estilos.card}>
-                    <h4 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: 'bold', color: '#ffffff' }}>
+                    <h4 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)' }}>
                       Lançamentos do dia {formatarDataBR(diaSelecionado)}
                     </h4>
                     {transacoesDiaSelecionado.length === 0 ? (
-                      <p style={{ margin: 0, color: '#64748b', fontSize: '14px', fontStyle: 'italic' }}>Nenhuma movimentação nesta data. Clique em "Lançar neste dia" para adicionar.</p>
+                      <p style={{ margin: 0, color: 'var(--text-faint)', fontSize: '14px', fontStyle: 'italic' }}>Nenhuma movimentação nesta data. Clique em "Lançar neste dia" para adicionar.</p>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         {transacoesDiaSelecionado.map(t => {
-                          const cfg = CATEGORIA_CORES[t.category] || { bg: '#1e293b', color: '#cbd5e1', border: '#334155' };
+                          const cfg = CATEGORIA_CORES[t.category] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
                           return (
-                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#090d16', padding: '12px 16px', borderRadius: '12px', border: '1px solid #1e293b' }}>
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg)', padding: '12px 16px', borderRadius: '12px', border: '1px solid var(--border)' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                 <div style={{ padding: '8px', borderRadius: '8px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
                                   {renderIconeTipo(t.type)}
                                 </div>
                                 <div>
-                                  <p style={{ margin: 0, fontWeight: 'bold', color: '#ffffff', fontSize: '14px' }}>{t.description}</p>
+                                  <p style={{ margin: 0, fontWeight: 'bold', color: 'var(--text-strong)', fontSize: '14px' }}>{t.description}</p>
                                   <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
                                 </div>
                               </div>
@@ -853,7 +1043,7 @@
                                 <span style={{ fontWeight: 'bold', color: renderCorTipo(t.type), fontSize: '15px' }}>
                                   {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
                                 </span>
-                                <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>
+                                <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer' }}>
                                   <Trash2 size={16} />
                                 </button>
                               </div>
@@ -864,19 +1054,19 @@
                     )}
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: '20px' }}>
                     {NOMES_MESES.map((nomeMes, idxMes) => {
                       const { primeiroDia, totalDias } = gerarDiasDoMes(anoCalendario, idxMes);
                       const diasEmBranco = Array.from({ length: primeiroDia });
                       const diasDoMes = Array.from({ length: totalDias }, (_, i) => i + 1);
 
                       return (
-                        <div key={nomeMes} style={{ backgroundColor: '#121c33', border: '1px solid #1e293b', borderRadius: '16px', padding: '16px' }}>
-                          <h4 style={{ margin: '0 0 12px 0', textAlign: 'center', color: '#38bdf8', fontSize: '15px', fontWeight: 'bold' }}>
+                        <div key={nomeMes} style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)', borderRadius: '16px', padding: '16px' }}>
+                          <h4 style={{ margin: '0 0 12px 0', textAlign: 'center', color: 'var(--c-sky)', fontSize: '15px', fontWeight: 'bold' }}>
                             {nomeMes}
                           </h4>
 
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', fontSize: '11px', color: '#64748b', fontWeight: 'bold', marginBottom: '8px' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', fontSize: '11px', color: 'var(--text-faint)', fontWeight: 'bold', marginBottom: '8px' }}>
                             <span>D</span><span>S</span><span>T</span><span>Q</span><span>Q</span><span>S</span><span>S</span>
                           </div>
 
@@ -901,9 +1091,9 @@
                                   onClick={() => setDiaSelecionado(dataChave)}
                                   style={{
                                     aspectRatio: '1',
-                                    backgroundColor: selecionado ? '#10b981' : '#090d16',
-                                    color: selecionado ? '#090d16' : '#f8fafc',
-                                    border: selecionado ? '2px solid #34d399' : '1px solid #1e293b',
+                                    backgroundColor: selecionado ? 'var(--accent)' : 'var(--bg)',
+                                    color: selecionado ? 'var(--on-accent)' : 'var(--text)',
+                                    border: selecionado ? '2px solid var(--accent-text)' : '1px solid var(--border)',
                                     borderRadius: '8px',
                                     fontSize: '12px',
                                     fontWeight: selecionado || itensDoDia.length > 0 ? 'bold' : 'normal',
@@ -919,8 +1109,8 @@
                                   <span>{dia}</span>
                                   {itensDoDia.length > 0 && (
                                     <div style={{ display: 'flex', gap: '2px', position: 'absolute', bottom: '3px' }}>
-                                      {temEntrada && <div style={{ width: '4px', height: '4px', borderRadius: '50%', backgroundColor: selecionado ? '#090d16' : '#34d399' }}></div>}
-                                      {temSaida && <div style={{ width: '4px', height: '4px', borderRadius: '50%', backgroundColor: selecionado ? '#f43f5e' : '#fb7185' }}></div>}
+                                      {temEntrada && <div style={{ width: '4px', height: '4px', borderRadius: '50%', backgroundColor: selecionado ? 'var(--on-accent)' : 'var(--accent-text)' }}></div>}
+                                      {temSaida && <div style={{ width: '4px', height: '4px', borderRadius: '50%', backgroundColor: selecionado ? '#f43f5e' : 'var(--danger-text)' }}></div>}
                                     </div>
                                   )}
                                 </button>
@@ -941,20 +1131,20 @@
           {modalTransacaoAberto && (
             <div style={estilos.modalOverlay}>
               <div style={estilos.modalContent}>
-                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 20px 0' }}>Novo Lançamento</h3>
-                {erroTransacao && <div style={{ backgroundColor: 'rgba(244,63,94,0.15)', color: '#fb7185', padding: '10px', borderRadius: '8px', fontSize: '12px', marginBottom: '16px' }}>{erroTransacao}</div>}
+                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Novo Lançamento</h3>
+                {erroTransacao && <div style={{ backgroundColor: 'rgba(244,63,94,0.15)', color: 'var(--danger-text)', padding: '10px', borderRadius: '8px', fontSize: '12px', marginBottom: '16px' }}>{erroTransacao}</div>}
                 <form onSubmit={adicionarTransacao} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div>
-                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Descrição</label>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Descrição</label>
                     <input type="text" value={descricao} onChange={e => setDescricao(e.target.value)} placeholder="Ex: Salário Empresa, Venda de Produto..." style={{ ...estilos.input, marginTop: '6px' }} required />
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
                     <div>
-                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Valor (R$)</label>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Valor (R$)</label>
                       <input type="number" step="0.01" value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} required />
                     </div>
                     <div>
-                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Tipo de Lançamento</label>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Tipo de Lançamento</label>
                       <select value={tipo} onChange={e => setTipo(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }}>
                         <option value="receita">Receita (Entrada)</option>
                         <option value="despesa">Despesa (Fixa/Essencial)</option>
@@ -962,20 +1152,20 @@
                       </select>
                     </div>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
                     <div>
-                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Categoria</label>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Categoria</label>
                       <select value={categoria} onChange={e => setCategoria(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }}>
                         {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                     <div>
-                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Data</label>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Data</label>
                       <input type="date" value={dataTransacao} onChange={e => setDataTransacao(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }} />
                     </div>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
-                    <button type="button" onClick={() => setModalTransacaoAberto(false)} style={{ backgroundColor: '#1e293b', color: '#f8fafc', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
+                    <button type="button" onClick={() => setModalTransacaoAberto(false)} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
                     <button type="submit" style={estilos.buttonPrimary}>Guardar</button>
                   </div>
                 </form>
@@ -986,24 +1176,24 @@
           {modalMetaAberto && (
             <div style={estilos.modalOverlay}>
               <div style={estilos.modalContent}>
-                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 20px 0' }}>Nova Meta</h3>
+                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Nova Meta</h3>
                 <form onSubmit={adicionarMeta} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div>
-                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Nome da Meta</label>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Nome da Meta</label>
                     <input type="text" value={nomeMeta} onChange={e => setNomeMeta(e.target.value)} placeholder="Ex: Comprar Carro" style={{ ...estilos.input, marginTop: '6px' }} required />
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
                     <div>
-                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Valor Desejado (R$)</label>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Valor Desejado (R$)</label>
                       <input type="number" step="0.01" value={objetivoMeta} onChange={e => setObjetivoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} required />
                     </div>
                     <div>
-                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Já Economizado</label>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Já Economizado</label>
                       <input type="number" step="0.01" value={economizadoMeta} onChange={e => setEconomizadoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} />
                     </div>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
-                    <button type="button" onClick={() => setModalMetaAberto(false)} style={{ backgroundColor: '#1e293b', color: '#f8fafc', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
+                    <button type="button" onClick={() => setModalMetaAberto(false)} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
                     <button type="submit" style={estilos.buttonPrimary}>Criar Meta</button>
                   </div>
                 </form>
@@ -1014,27 +1204,27 @@
           {modalOrcamentoAberto && (
             <div style={estilos.modalOverlay}>
               <div style={estilos.modalContent}>
-                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#ffffff', margin: '0 0 8px 0' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 8px 0' }}>
                   Ajustar Limite - {categoriaEditando}
                 </h3>
-                <p style={{ fontSize: '13px', color: '#94a3b8', margin: '0 0 20px 0' }}>Defina o valor máximo de gastos mensal para esta categoria.</p>
+                <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 0 20px 0' }}>Defina o valor máximo de gastos mensal para esta categoria.</p>
                 
                 <form onSubmit={handleSalvarLimiteCategoria} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div>
-                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8' }}>Limite Mensal (R$)</label>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Limite Mensal (R$)</label>
                     <input 
                       type="number" 
                       step="0.01" 
                       value={novoLimiteCategoria} 
                       onChange={e => setNovoLimiteCategoria(e.target.value)} 
                       placeholder="0,00" 
-                      style={{ ...estilos.input, marginTop: '6px', fontSize: '16px', fontWeight: 'bold', color: '#34d399' }} 
+                      style={{ ...estilos.input, marginTop: '6px', fontSize: '16px', fontWeight: 'bold', color: 'var(--accent-text)' }} 
                       required 
                       autoFocus 
                     />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
-                    <button type="button" onClick={() => setModalOrcamentoAberto(false)} style={{ backgroundColor: '#1e293b', color: '#f8fafc', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
+                    <button type="button" onClick={() => setModalOrcamentoAberto(false)} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
                     <button type="submit" style={estilos.buttonPrimary}>Salvar Limite</button>
                   </div>
                 </form>
