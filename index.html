@@ -147,9 +147,24 @@
     const CalendarIcon = createIcon('calendar');
     const ChevronLeft = createIcon('chevron-left');
     const ChevronRight = createIcon('chevron-right');
-    const Loader2 = createIcon('loader-2');
+    const Pencil = createIcon('pencil');
+    const Repeat = createIcon('repeat');
 
     const CATEGORIAS = ['Salário', 'Vendas', 'Alimentação', 'Transporte', 'Moradia', 'Lazer', 'Saúde', 'Educação', 'Outros'];
+    // Categorias oferecidas no formulário conforme o tipo escolhido
+    const CATEGORIAS_ENTRADA = ['Salário', 'Vendas', 'Outros'];
+    const CATEGORIAS_SAIDA = ['Alimentação', 'Transporte', 'Moradia', 'Lazer', 'Saúde', 'Educação', 'Outros'];
+    const CATEGORIA_PADRAO = { receita: 'Salário', despesa: 'Moradia', gasto: 'Alimentação' };
+    const categoriasDoTipo = (t) => (t === 'receita' ? CATEGORIAS_ENTRADA : CATEGORIAS_SAIDA);
+
+    // Aceita "12,50", "1.234,56", "2.000" (dois mil) ou "12.5"
+    const lerValor = (texto) => {
+      let s = String(texto == null ? '' : texto).trim().replace(/\s|R\$/g, '');
+      if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+      else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+      return s === '' ? NaN : Number(s);
+    };
+    const valorParaCampo = (n) => (n === '' || n == null ? '' : String(n).replace('.', ','));
 
     const CATEGORIA_CORES = {
       'Salário': { bg: 'rgba(var(--accent-rgb), 0.15)', color: 'var(--accent-text)', border: 'rgba(var(--accent-rgb), 0.3)' },
@@ -160,7 +175,8 @@
       'Lazer': { bg: 'rgba(168, 85, 247, 0.15)', color: 'var(--c-purple)', border: 'rgba(168, 85, 247, 0.3)' },
       'Saúde': { bg: 'rgba(244, 63, 94, 0.15)', color: 'var(--danger-text)', border: 'rgba(244, 63, 94, 0.3)' },
       'Educação': { bg: 'rgba(59, 130, 246, 0.15)', color: 'var(--c-blue)', border: 'rgba(59, 130, 246, 0.3)' },
-      'Outros': { bg: 'rgba(148, 163, 184, 0.15)', color: 'var(--text-muted)', border: 'rgba(148, 163, 184, 0.3)' }
+      'Outros': { bg: 'rgba(148, 163, 184, 0.15)', color: 'var(--text-muted)', border: 'rgba(148, 163, 184, 0.3)' },
+      'Metas': { bg: 'rgba(168, 85, 247, 0.15)', color: 'var(--c-purple)', border: 'rgba(168, 85, 247, 0.3)' }
     };
 
     // Data de hoje no fuso do aparelho (toISOString usa UTC e, no Brasil, virava o dia seguinte após as 21h)
@@ -173,6 +189,50 @@
       'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
       'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
     ];
+
+    // Meses no formato "AAAA-MM"
+    const mesDe = (dataISO) => String(dataISO || '').slice(0, 7);
+    const somarMeses = (mes, n) => {
+      const [a, m] = mes.split('-').map(Number);
+      const d = new Date(a, m - 1 + n, 1);
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    };
+    const nomeDoMes = (mes) => {
+      const [a, m] = mes.split('-').map(Number);
+      return NOMES_MESES[m - 1] + ' de ' + a;
+    };
+    const ultimoDia = (mes) => {
+      const [a, m] = mes.split('-').map(Number);
+      return new Date(a, m, 0).getDate();
+    };
+
+    // Cria os lançamentos das contas fixas que ainda faltam, do mês de início até o mês atual.
+    // Cada conta fixa guarda os meses já gerados, então apagar um lançamento gerado não o recria.
+    function gerarLancamentosFixos(recorrentes, transacoes, mesAtual) {
+      const novas = [];
+      let base = Date.now();
+      const atualizadas = recorrentes.map(r => {
+        if (!r.ativo) return r;
+        const gerados = new Set(r.gerados || []);
+        let mes = r.inicio;
+        let guarda = 0;
+        while (mes <= mesAtual && guarda < 240) {
+          if (!gerados.has(mes)) {
+            const dia = String(Math.min(r.dia, ultimoDia(mes))).padStart(2, '0');
+            novas.push({ id: base++, description: r.description, amount: r.amount, category: r.category, type: r.type, date: mes + '-' + dia, recorrenteId: r.id });
+            gerados.add(mes);
+          }
+          mes = somarMeses(mes, 1);
+          guarda++;
+        }
+        return gerados.size === (r.gerados || []).length ? r : { ...r, gerados: [...gerados].sort() };
+      });
+      if (!novas.length) return null;
+      return {
+        recorrentes: atualizadas,
+        transacoes: [...novas, ...transacoes].sort((a, b) => new Date(b.date) - new Date(a.date))
+      };
+    }
 
     function App() {
       const [transacoes, setTransacoes] = useState([]);
@@ -190,6 +250,8 @@
       });
 
       const [metas, setMetas] = useState([]);
+      const [recorrentes, setRecorrentes] = useState([]);
+      const [mesSelecionado, setMesSelecionado] = useState(mesDe(hojeISO()));
 
       const [valoresAporte, setValoresAporte] = useState({});
 
@@ -238,7 +300,6 @@
       const [filtroCategoria, setFiltroCategoria] = useState('todas');
       const [termoPesquisa, setTermoPesquisa] = useState('');
 
-      const [salvando, setSalvando] = useState(false);
       const [mensagemNotificacao, setMensagemNotificacao] = useState(null);
 
       const [anoCalendario, setAnoCalendario] = useState(new Date().getFullYear());
@@ -247,12 +308,15 @@
       const [modalTransacaoAberto, setModalTransacaoAberto] = useState(false);
       const [descricao, setDescricao] = useState('');
       const [valor, setValor] = useState('');
-      const [categoria, setCategoria] = useState('Salário');
-      const [tipo, setTipo] = useState('receita');
+      const [categoria, setCategoria] = useState('Alimentação');
+      const [tipo, setTipo] = useState('gasto');
       const [dataTransacao, setDataTransacao] = useState(hojeISO());
       const [erroTransacao, setErroTransacao] = useState('');
+      const [editandoId, setEditandoId] = useState(null);
+      const [repetirMensal, setRepetirMensal] = useState(false);
 
       const [modalMetaAberto, setModalMetaAberto] = useState(false);
+      const [editandoMetaId, setEditandoMetaId] = useState(null);
       const [nomeMeta, setNomeMeta] = useState('');
       const [objetivoMeta, setObjetivoMeta] = useState('');
       const [economizadoMeta, setEconomizadoMeta] = useState('');
@@ -279,7 +343,8 @@
 
           try {
             const t = localStorage.getItem('@finapp_transacoes');
-            if (t) setTransacoes(JSON.parse(t));
+            const listaTransacoes = t ? JSON.parse(t) : [];
+            setTransacoes(listaTransacoes);
             const l = localStorage.getItem('@finapp_limitesCategorias');
             if (l) setLimitesCategorias(prev => ({ ...prev, ...JSON.parse(l) }));
             // Metas zeradas a pedido do usuário (uma única vez): remove as metas salvas neste aparelho.
@@ -289,6 +354,18 @@
             }
             const m = localStorage.getItem('@finapp_metas');
             if (m) setMetas(JSON.parse(m));
+            const r = localStorage.getItem('@finapp_recorrentes');
+            const listaRecorrentes = r ? JSON.parse(r) : [];
+            setRecorrentes(listaRecorrentes);
+
+            // Lança as contas fixas dos meses que passaram desde a última abertura
+            const gerado = gerarLancamentosFixos(listaRecorrentes, listaTransacoes, mesDe(hojeISO()));
+            if (gerado) {
+              setTransacoes(gerado.transacoes);
+              setRecorrentes(gerado.recorrentes);
+              localStorage.setItem('@finapp_transacoes', JSON.stringify(gerado.transacoes));
+              localStorage.setItem('@finapp_recorrentes', JSON.stringify(gerado.recorrentes));
+            }
           } catch (e) {}
         }
 
@@ -304,50 +381,29 @@
         }, 3000);
       };
 
-      const salvarTudoNoDisco = async (novosDados = {}, manual = false) => {
+      // Tudo é salvo no aparelho a cada ação; não existe mais botão de salvar.
+      const [salvoEm, setSalvoEm] = useState(null);
+      const salvarTudoNoDisco = async (novosDados = {}) => {
         const payload = {
           transacoes: novosDados.transacoes !== undefined ? novosDados.transacoes : transacoes,
           limitesCategorias: novosDados.limitesCategorias !== undefined ? novosDados.limitesCategorias : limitesCategorias,
-          metas: novosDados.metas !== undefined ? novosDados.metas : metas
+          metas: novosDados.metas !== undefined ? novosDados.metas : metas,
+          recorrentes: novosDados.recorrentes !== undefined ? novosDados.recorrentes : recorrentes
         };
 
-        if (manual) setSalvando(true);
-
-        setTimeout(() => {
-          try {
-            localStorage.setItem('@finapp_transacoes', JSON.stringify(payload.transacoes));
-            localStorage.setItem('@finapp_limitesCategorias', JSON.stringify(payload.limitesCategorias));
-            localStorage.setItem('@finapp_metas', JSON.stringify(payload.metas));
-          } catch (e) {}
-        }, 0);
+        try {
+          localStorage.setItem('@finapp_transacoes', JSON.stringify(payload.transacoes));
+          localStorage.setItem('@finapp_limitesCategorias', JSON.stringify(payload.limitesCategorias));
+          localStorage.setItem('@finapp_metas', JSON.stringify(payload.metas));
+          localStorage.setItem('@finapp_recorrentes', JSON.stringify(payload.recorrentes));
+          setSalvoEm(new Date());
+        } catch (e) {
+          exibirNotificacao('❌ Não foi possível salvar neste aparelho. Exporte um backup.');
+        }
 
         if (window.electronAPI) {
-          window.electronAPI.saveData(payload)
-            .then(() => {
-              if (manual) {
-                setSalvando(false);
-                exibirNotificacao("💾 Dados salvos em segundo plano com sucesso!");
-              }
-            })
-            .catch((e) => {
-              console.error("Erro ao salvar no Electron:", e);
-              if (manual) {
-                setSalvando(false);
-                exibirNotificacao("❌ Erro ao salvar os dados no disco.");
-              }
-            });
-        } else {
-          if (manual) {
-            setTimeout(() => {
-              setSalvando(false);
-              exibirNotificacao("💾 Dados salvos com sucesso!");
-            }, 500);
-          }
+          window.electronAPI.saveData(payload).catch((e) => console.error("Erro ao salvar no Electron:", e));
         }
-      };
-
-      const handleSalvarTudoManual = () => {
-        salvarTudoNoDisco({}, true);
       };
 
       const formatarMoeda = (val) => Number(val || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -357,19 +413,31 @@
         return `${dia}/${mes}/${ano}`;
       };
 
-      const totalReceitas = transacoes.filter(t => t.type === 'receita').reduce((acc, t) => acc + Number(t.amount), 0);
-      const totalDespesas = transacoes.filter(t => t.type === 'despesa').reduce((acc, t) => acc + Number(t.amount), 0);
-      const totalGastos = transacoes.filter(t => t.type === 'gasto').reduce((acc, t) => acc + Number(t.amount), 0);
-      
-      const totalSaidas = totalDespesas + totalGastos;
-      const saldoTotal = totalReceitas - totalSaidas;
+      // Números do mês escolhido (Dashboard e Planejamento)
+      const somar = (lista) => lista.reduce((acc, t) => acc + Number(t.amount), 0);
+      // Lançamentos com data futura são "agendados": aparecem à parte e só entram nos totais quando o dia chegar
+      const hoje = hojeISO();
+      const ehFuturo = (t) => t.date > hoje;
+      const agendadosDoMes = transacoes.filter(t => mesDe(t.date) === mesSelecionado && ehFuturo(t)).sort((a, b) => a.date.localeCompare(b.date));
+      const transacoesDoMes = transacoes.filter(t => mesDe(t.date) === mesSelecionado && !ehFuturo(t));
+      const totalReceitas = somar(transacoesDoMes.filter(t => t.type === 'receita'));
+      const totalDespesas = somar(transacoesDoMes.filter(t => t.type === 'despesa'));
+      const totalGastos = somar(transacoesDoMes.filter(t => t.type === 'gasto'));
 
-      const categoriasDeGastos = CATEGORIAS.filter(c => c !== 'Salário' && c !== 'Vendas');
+      const totalSaidas = totalDespesas + totalGastos;
+      const saldoMes = totalReceitas - totalSaidas;
+
+      // Saldo acumulado: tudo até o fim do mês escolhido
+      const transacoesAteMes = transacoes.filter(t => mesDe(t.date) <= mesSelecionado && !ehFuturo(t));
+      // Saldo do mês se todos os agendados acontecerem
+      const saldoPrevistoMes = saldoMes + somar(agendadosDoMes.filter(t => t.type === 'receita')) - somar(agendadosDoMes.filter(t => t.type !== 'receita'));
+      const saldoAcumulado = somar(transacoesAteMes.filter(t => t.type === 'receita')) - somar(transacoesAteMes.filter(t => t.type !== 'receita'));
+
+      // "Metas" (aportes) fica fora do planejamento: é dinheiro guardado, não gasto
+      const categoriasDeGastos = CATEGORIAS_SAIDA;
 
       const gastosPorCategoria = categoriasDeGastos.reduce((acc, cat) => {
-        acc[cat] = transacoes
-          .filter(t => (t.type === 'despesa' || t.type === 'gasto') && t.category === cat)
-          .reduce((sum, t) => sum + Number(t.amount), 0);
+        acc[cat] = somar(transacoesDoMes.filter(t => (t.type === 'despesa' || t.type === 'gasto') && t.category === cat));
         return acc;
       }, {});
 
@@ -378,19 +446,71 @@
       const saldoRestanteGeral = orcamentoTotalPlanejado - totalGastoGeral;
       const percentualOrcamento = orcamentoTotalPlanejado > 0 ? (totalGastoGeral / orcamentoTotalPlanejado) * 100 : 0;
 
+      const ordenarPorData = (lista) => lista.sort((a, b) => new Date(b.date) - new Date(a.date));
+
       function adicionarTransacao(e) {
         e.preventDefault();
         setErroTransacao('');
         if (!descricao.trim()) { setErroTransacao('A descrição é obrigatória.'); return; }
-        const numValor = Number(valor);
-        if (isNaN(numValor) || numValor <= 0) { setErroTransacao('O valor deve ser maior que zero.'); return; }
+        const numValor = lerValor(valor);
+        if (isNaN(numValor) || numValor <= 0) { setErroTransacao('Digite um valor maior que zero, por exemplo 12,50.'); return; }
+        if (!dataTransacao) { setErroTransacao('Escolha a data do lançamento.'); return; }
 
-        const nova = { id: Date.now(), description: descricao.trim(), amount: numValor, category: categoria, type: tipo, date: dataTransacao };
-        const novasTransacoes = [nova, ...transacoes].sort((a, b) => new Date(b.date) - new Date(a.date));
-        
+        const dados = { description: descricao.trim(), amount: Math.round(numValor * 100) / 100, category: categoria, type: tipo, date: dataTransacao };
+        let novasTransacoes;
+        let novosRecorrentes = recorrentes;
+
+        if (editandoId !== null) {
+          novasTransacoes = ordenarPorData(transacoes.map(t => (t.id === editandoId ? { ...t, ...dados } : t)));
+        } else if (repetirMensal) {
+          // Conta fixa: lança este mês agora e os próximos automaticamente
+          const rec = { id: Date.now(), ...dados, dia: Number(dataTransacao.slice(8, 10)), inicio: mesDe(dataTransacao), gerados: [mesDe(dataTransacao)], ativo: true };
+          const nova = { id: Date.now() + 1, ...dados, recorrenteId: rec.id };
+          novosRecorrentes = [...recorrentes, rec];
+          novasTransacoes = ordenarPorData([nova, ...transacoes]);
+          const gerado = gerarLancamentosFixos(novosRecorrentes, novasTransacoes, mesDe(hojeISO()));
+          if (gerado) { novasTransacoes = gerado.transacoes; novosRecorrentes = gerado.recorrentes; }
+          setRecorrentes(novosRecorrentes);
+        } else {
+          novasTransacoes = ordenarPorData([{ id: Date.now(), ...dados }, ...transacoes]);
+        }
+
         setTransacoes(novasTransacoes);
-        setDescricao(''); setValor(''); setModalTransacaoAberto(false);
-        salvarTudoNoDisco({ transacoes: novasTransacoes });
+        fecharModalTransacao();
+        salvarTudoNoDisco({ transacoes: novasTransacoes, recorrentes: novosRecorrentes });
+        exibirNotificacao(editandoId !== null ? 'Lançamento atualizado' : repetirMensal ? 'Conta fixa criada: repete todo mês' : 'Lançamento guardado');
+      }
+
+      function fecharModalTransacao() {
+        setModalTransacaoAberto(false);
+        setEditandoId(null);
+        setRepetirMensal(false);
+        setDescricao(''); setValor(''); setErroTransacao('');
+      }
+
+      function trocarTipo(novoTipo) {
+        setTipo(novoTipo);
+        if (!categoriasDoTipo(novoTipo).includes(categoria)) setCategoria(CATEGORIA_PADRAO[novoTipo]);
+      }
+
+      function abrirEdicao(t) {
+        setEditandoId(t.id);
+        setRepetirMensal(false);
+        setDescricao(t.description);
+        setValor(valorParaCampo(t.amount));
+        setTipo(t.type);
+        setCategoria(t.category);
+        setDataTransacao(t.date);
+        setErroTransacao('');
+        setModalTransacaoAberto(true);
+      }
+
+      function pararRecorrente(id) {
+        if (!confirm('Parar de lançar esta conta todo mês? Os lançamentos que já existem continuam no extrato.')) return;
+        const novos = recorrentes.map(r => (r.id === id ? { ...r, ativo: false } : r));
+        setRecorrentes(novos);
+        salvarTudoNoDisco({ recorrentes: novos });
+        exibirNotificacao('Conta fixa encerrada');
       }
 
       function excluirTransacao(id) {
@@ -408,19 +528,44 @@
         return true;
       });
 
+      const [erroMeta, setErroMeta] = useState('');
+
       function adicionarMeta(e) {
         e.preventDefault();
-        if (!nomeMeta || !objetivoMeta) return;
-        const novasMetas = [...metas, { id: Date.now(), nome: nomeMeta, objetivo: Number(objetivoMeta), economizado: Number(economizadoMeta || 0) }];
-        
+        setErroMeta('');
+        const objetivo = lerValor(objetivoMeta);
+        const guardado = economizadoMeta === '' ? 0 : lerValor(economizadoMeta);
+        if (!nomeMeta.trim()) { setErroMeta('Dê um nome para a meta.'); return; }
+        if (isNaN(objetivo) || objetivo <= 0) { setErroMeta('Digite o valor desejado, por exemplo 5000 ou 5.000,00.'); return; }
+        if (isNaN(guardado) || guardado < 0) { setErroMeta('O valor já guardado não pode ser negativo.'); return; }
+
+        const novasMetas = editandoMetaId !== null
+          ? metas.map(m => (m.id === editandoMetaId ? { ...m, nome: nomeMeta.trim(), objetivo, economizado: guardado } : m))
+          : [...metas, { id: Date.now(), nome: nomeMeta.trim(), objetivo, economizado: guardado }];
+
         setMetas(novasMetas);
-        setNomeMeta(''); setObjetivoMeta(''); setEconomizadoMeta(''); setModalMetaAberto(false);
+        fecharModalMeta();
         salvarTudoNoDisco({ metas: novasMetas });
       }
 
+      function fecharModalMeta() {
+        setModalMetaAberto(false);
+        setEditandoMetaId(null);
+        setNomeMeta(''); setObjetivoMeta(''); setEconomizadoMeta(''); setErroMeta('');
+      }
+
+      function abrirEdicaoMeta(meta) {
+        setEditandoMetaId(meta.id);
+        setNomeMeta(meta.nome);
+        setObjetivoMeta(valorParaCampo(meta.objetivo));
+        setEconomizadoMeta(valorParaCampo(meta.economizado));
+        setErroMeta('');
+        setModalMetaAberto(true);
+      }
+
       function alterarValorMeta(id, operacao) {
-        const quantia = Number(valoresAporte[id]);
-        if (isNaN(quantia) || quantia <= 0) return;
+        const quantia = lerValor(valoresAporte[id]);
+        if (isNaN(quantia) || quantia <= 0) { exibirNotificacao('Digite um valor, por exemplo 50,00'); return; }
 
         const metaAlvo = metas.find(m => m.id === id);
         const nomeDaMeta = metaAlvo ? metaAlvo.nome : 'Meta';
@@ -438,7 +583,7 @@
           id: Date.now(),
           description: operacao === 'somar' ? `Aporte: ${nomeDaMeta}` : `Retirada: ${nomeDaMeta}`,
           amount: quantia,
-          category: 'Outros',
+          category: 'Metas',
           type: operacao === 'somar' ? 'gasto' : 'receita',
           date: hojeISO()
         };
@@ -462,8 +607,8 @@
 
       function handleSalvarLimiteCategoria(e) {
         e.preventDefault();
-        const val = Number(novoLimiteCategoria);
-        if (isNaN(val) || val < 0) return;
+        const val = lerValor(novoLimiteCategoria);
+        if (isNaN(val) || val < 0) { exibirNotificacao('Digite um limite válido, por exemplo 800,00'); return; }
 
         const novosLimites = { ...limitesCategorias, [categoriaEditando]: val };
         setLimitesCategorias(novosLimites);
@@ -473,6 +618,9 @@
       }
 
       const abrirModalComData = (dataFormatted) => {
+        setEditandoId(null);
+        setRepetirMensal(false);
+        setDescricao(''); setValor(''); setErroTransacao('');
         setDataTransacao(dataFormatted);
         setModalTransacaoAberto(true);
       };
@@ -510,7 +658,7 @@
       const transacoesDiaSelecionado = transacoes.filter(t => t.date === diaSelecionado);
 
       const exportarDados = () => {
-        const dados = { versao: 1, exportadoEm: new Date().toISOString(), transacoes, limitesCategorias, metas };
+        const dados = { versao: 2, exportadoEm: new Date().toISOString(), transacoes, limitesCategorias, metas, recorrentes };
         const blob = new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -534,10 +682,12 @@
             if (!window.confirm('Isso vai substituir os dados atuais deste aparelho. Continuar?')) return;
             const limites = d.limitesCategorias ? { ...limitesCategorias, ...d.limitesCategorias } : limitesCategorias;
             const novasMetas = Array.isArray(d.metas) ? d.metas : metas;
+            const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes : [];
             setTransacoes(d.transacoes);
             setLimitesCategorias(limites);
             setMetas(novasMetas);
-            salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas });
+            setRecorrentes(novosRecorrentes);
+            salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes });
             exibirNotificacao('📥 Dados importados com sucesso!');
           } catch (err) {
             exibirNotificacao('❌ Arquivo de backup inválido.');
@@ -559,6 +709,34 @@
         modalOverlay: { position: 'fixed', inset: 0, backgroundColor: 'var(--overlay)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 50 },
         modalContent: { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '20px', width: '100%', maxWidth: '450px', maxHeight: '90vh', overflowY: 'auto', padding: isMobile ? '20px' : '32px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }
       };
+
+      const botaoMes = { backgroundColor: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-strong)', padding: '8px 10px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' };
+      const mesAtual = mesDe(hojeISO());
+      const seletorMes = (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', backgroundColor: 'var(--card)', border: '1px solid var(--border)', borderRadius: '16px', padding: isMobile ? '10px 12px' : '12px 18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button onClick={() => setMesSelecionado(somarMeses(mesSelecionado, -1))} style={botaoMes} aria-label="Mês anterior"><ChevronLeft size={18} /></button>
+            <strong style={{ fontSize: isMobile ? '16px' : '18px', color: 'var(--text-strong)', minWidth: isMobile ? '150px' : '190px', textAlign: 'center' }}>{nomeDoMes(mesSelecionado)}</strong>
+            <button onClick={() => setMesSelecionado(somarMeses(mesSelecionado, 1))} style={botaoMes} aria-label="Próximo mês"><ChevronRight size={18} /></button>
+          </div>
+          {mesSelecionado !== mesAtual && (
+            <button onClick={() => setMesSelecionado(mesAtual)} style={{ background: 'none', border: 'none', color: 'var(--accent-text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>Voltar para o mês atual</button>
+          )}
+        </div>
+      );
+
+      const botoesItem = (t) => (
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button onClick={() => abrirEdicao(t)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Editar" aria-label={'Editar ' + t.description}>
+            <Pencil size={16} />
+          </button>
+          <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Excluir" aria-label={'Excluir ' + t.description}>
+            <Trash2 size={16} />
+          </button>
+        </div>
+      );
+
+      const recorrentesAtivos = recorrentes.filter(r => r.ativo);
 
       return (
         <div className="app-root" style={estilos.container}>
@@ -688,10 +866,12 @@
               </h2>
               </div>
               <div style={{ display: 'flex', gap: isMobile ? '8px' : '12px', flexShrink: 0 }}>
-                <button onClick={handleSalvarTudoManual} style={isMobile ? { ...estilos.buttonSave, padding: '10px 12px' } : estilos.buttonSave} aria-label="Salvar tudo" title="Salvar tudo permanentemente sem parar o app">
-                  {salvando ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} 
-                  {!isMobile && (salvando ? 'Salvando...' : 'Salvar Tudo')}
-                </button>
+                {!isMobile && (
+                  <span title="Tudo é salvo neste aparelho automaticamente" style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    <CheckCircle2 size={14} color="var(--accent)" />
+                    {salvoEm ? 'Salvo às ' + salvoEm.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'Salvo automaticamente'}
+                  </span>
+                )}
                 <button onClick={() => abrirModalComData(hojeISO())} style={isMobile ? { ...estilos.buttonPrimary, padding: '10px 12px' } : estilos.buttonPrimary} aria-label="Novo lançamento">
                   <PlusCircle size={20} /> {!isMobile && 'Novo Lançamento'}
                 </button>
@@ -702,13 +882,19 @@
               
               {abaAtiva === 'dashboard' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+                  {seletorMes}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '20px' }}>
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Saldo Total</p>
-                      <h3 style={{ fontSize: '28px', fontWeight: '800', color: saldoTotal >= 0 ? 'var(--accent-text)' : 'var(--danger-text)', margin: 0 }}>{formatarMoeda(saldoTotal)}</h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Saldo do Mês</p>
+                      <h3 style={{ fontSize: '28px', fontWeight: '800', color: saldoMes >= 0 ? 'var(--accent-text)' : 'var(--danger-text)', margin: 0 }}>{formatarMoeda(saldoMes)}</h3>
                       <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Sparkles size={12} color="var(--accent)" /> Atualizado em tempo real
+                        <Sparkles size={12} color="var(--accent)" /> Acumulado até aqui: {formatarMoeda(saldoAcumulado)}
                       </p>
+                      {agendadosDoMes.length > 0 && (
+                        <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '4px 0 0 0' }}>
+                          Previsto com agendados: <strong style={{ color: saldoPrevistoMes >= 0 ? 'var(--accent-text)' : 'var(--danger-text)' }}>{formatarMoeda(saldoPrevistoMes)}</strong>
+                        </p>
+                      )}
                     </div>
 
                     <div style={estilos.card}>
@@ -741,12 +927,12 @@
                   )}
 
                   <div style={estilos.card}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Últimos Lançamentos</h3>
-                    {transacoes.length === 0 ? (
-                      <p style={{ color: 'var(--text-faint)', textAlign: 'center', padding: '24px 0', fontSize: '14px' }}>Nenhum lançamento registrado no extrato.</p>
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Últimos Lançamentos do Mês</h3>
+                    {transacoesDoMes.length === 0 ? (
+                      <p style={{ color: 'var(--text-faint)', textAlign: 'center', padding: '24px 0', fontSize: '14px' }}>Nenhum lançamento em {nomeDoMes(mesSelecionado)}.</p>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        {transacoes.slice(0, 5).map(t => {
+                        {transacoesDoMes.slice(0, 5).map(t => {
                           const cfg = CATEGORIA_CORES[t.category] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
                           return (
                             <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', padding: '14px 18px', borderRadius: '12px' }}>
@@ -762,6 +948,7 @@
                                       {t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto'}
                                     </span>
                                     <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)}</span>
+                                    {ehFuturo(t) && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--border-strong)', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase' }}>Agendado</span>}
                                   </div>
                                 </div>
                               </div>
@@ -774,11 +961,37 @@
                       </div>
                     )}
                   </div>
+
+                  {agendadosDoMes.length > 0 && (
+                    <div style={estilos.card}>
+                      <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <CalendarIcon size={16} /> Agendados ({agendadosDoMes.length})
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 14px 0' }}>Lançamentos com data futura. Só entram no saldo e no planejamento quando o dia chegar.</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {agendadosDoMes.map(t => (
+                          <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', backgroundColor: 'var(--bg)', border: '1px dashed var(--border-strong)', borderRadius: '12px', padding: isMobile ? '10px 12px' : '12px 18px' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <p style={{ margin: '0 0 2px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px', overflowWrap: 'anywhere' }}>{t.description}</p>
+                              <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)} · {t.category}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                              <span style={{ fontWeight: 'bold', fontSize: '14px', color: renderCorTipo(t.type), opacity: 0.8, whiteSpace: 'nowrap' }}>
+                                {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
+                              </span>
+                              {botoesItem(t)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
               {abaAtiva === 'orcamento' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+                  {seletorMes}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '20px' }}>
                     <div style={estilos.card}>
                       <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Teto Planejado</p>
@@ -827,7 +1040,7 @@
                               <button 
                                 onClick={() => {
                                   setCategoriaEditando(cat);
-                                  setNovoLimiteCategoria(limite);
+                                  setNovoLimiteCategoria(valorParaCampo(limite));
                                   setModalOrcamentoAberto(true);
                                 }}
                                 style={{ background: 'none', border: 'none', color: 'var(--c-sky)', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
@@ -876,10 +1089,31 @@
                       </select>
                       <select value={filtroCategoria} onChange={e => setFiltroCategoria(e.target.value)} style={estilos.input}>
                         <option value="todas">Todas as Categorias</option>
-                        {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+                        {[...CATEGORIAS, 'Metas'].map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                   </div>
+
+                  {recorrentesAtivos.length > 0 && (
+                    <div style={estilos.card}>
+                      <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: '8px' }}><Repeat size={16} /> Contas fixas ({recorrentesAtivos.length})</h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 14px 0' }}>Lançadas sozinhas todo mês, no mesmo dia. Para mudar o valor de um mês, edite o lançamento no extrato.</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {recorrentesAtivos.map(r => (
+                          <div key={r.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 14px' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <strong style={{ fontSize: '14px', color: 'var(--text)' }}>{r.description}</strong>
+                              <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '8px' }}>todo dia {r.dia} · {r.category}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                              <span style={{ fontWeight: 'bold', color: renderCorTipo(r.type) }}>{r.type === 'receita' ? '+' : '-'} {formatarMoeda(r.amount)}</span>
+                              <button onClick={() => pararRecorrente(r.id)} style={{ background: 'none', border: '1px solid var(--border-strong)', borderRadius: '8px', color: 'var(--text-muted)', fontSize: '12px', fontWeight: '600', padding: '5px 10px', cursor: 'pointer' }}>Parar de repetir</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <div style={estilos.card}>
                     <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Extrato Completo ({transacoesFiltradas.length})</h3>
@@ -890,29 +1124,33 @@
                         {transacoesFiltradas.map(t => {
                           const cfg = CATEGORIA_CORES[t.category] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
                           return (
-                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', padding: '14px 18px', borderRadius: '12px' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                                <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
-                                  {renderIconeTipo(t.type)}
-                                </div>
-                                <div>
-                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px' }}>{t.description}</p>
-                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', padding: isMobile ? '12px' : '14px 18px', borderRadius: '12px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '10px' : '14px', minWidth: 0 }}>
+                                {!isMobile && (
+                                  <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
+                                    {renderIconeTipo(t.type)}
+                                  </div>
+                                )}
+                                <div style={{ minWidth: 0 }}>
+                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px', overflowWrap: 'anywhere' }}>
+                                    {t.recorrenteId && <span title="Conta fixa: repete todo mês" style={{ color: 'var(--text-faint)', marginRight: '6px' }}><Repeat size={13} /></span>}
+                                    {t.description}
+                                  </p>
+                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type), fontWeight: '700', textTransform: 'uppercase' }}>
                                       {t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto'}
                                     </span>
                                     <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)}</span>
+                                    {ehFuturo(t) && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--border-strong)', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase' }}>Agendado</span>}
                                   </div>
                                 </div>
                               </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-                                <span style={{ fontWeight: 'bold', fontSize: '15px', color: renderCorTipo(t.type) }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '6px' : '14px', flexShrink: 0 }}>
+                                <span style={{ fontWeight: 'bold', fontSize: '15px', color: renderCorTipo(t.type), whiteSpace: 'nowrap' }}>
                                   {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
                                 </span>
-                                <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer' }} title="Excluir">
-                                  <Trash2 size={18} />
-                                </button>
+                                {botoesItem(t)}
                               </div>
                             </div>
                           );
@@ -927,7 +1165,7 @@
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0 }}>Metas e Objetivos</h3>
-                    <button onClick={() => setModalMetaAberto(true)} style={estilos.buttonPrimary}>
+                    <button onClick={() => { fecharModalMeta(); setModalMetaAberto(true); }} style={estilos.buttonPrimary}>
                       <PlusCircle size={18} /> Nova Meta
                     </button>
                   </div>
@@ -946,9 +1184,14 @@
                                 <h4 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)' }}>{meta.nome}</h4>
                                 <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>Objetivo: <strong style={{ color: 'var(--accent-text)' }}>{formatarMoeda(meta.objetivo)}</strong></p>
                               </div>
-                              <button onClick={() => excluirMeta(meta.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer' }} title="Excluir Meta">
-                                <Trash2 size={16} />
-                              </button>
+                              <div style={{ display: 'flex', gap: '4px' }}>
+                                <button onClick={() => abrirEdicaoMeta(meta)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Editar meta" aria-label={'Editar meta ' + meta.nome}>
+                                  <Pencil size={16} />
+                                </button>
+                                <button onClick={() => excluirMeta(meta.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Excluir meta" aria-label={'Excluir meta ' + meta.nome}>
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
                             </div>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
@@ -970,10 +1213,10 @@
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '12px', borderTop: '1px solid var(--border)' }}>
                               <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Movimentar valor da meta:</span>
                               <div style={{ display: 'flex', gap: '8px' }}>
-                                <input 
-                                  type="number" 
-                                  step="0.01" 
-                                  placeholder="R$ 0,00" 
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="R$ 0,00"
                                   value={valoresAporte[meta.id] || ''} 
                                   onChange={e => setValoresAporte({ ...valoresAporte, [meta.id]: e.target.value })} 
                                   style={{ ...estilos.input, padding: '8px 12px', fontSize: '12px', flex: 1 }} 
@@ -1048,13 +1291,11 @@
                                   <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
                                 </div>
                               </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                                <span style={{ fontWeight: 'bold', color: renderCorTipo(t.type), fontSize: '15px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                                <span style={{ fontWeight: 'bold', color: renderCorTipo(t.type), fontSize: '15px', whiteSpace: 'nowrap' }}>
                                   {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
                                 </span>
-                                <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer' }}>
-                                  <Trash2 size={16} />
-                                </button>
+                                {botoesItem(t)}
                               </div>
                             </div>
                           );
@@ -1140,7 +1381,7 @@
           {modalTransacaoAberto && (
             <div style={estilos.modalOverlay}>
               <div style={estilos.modalContent}>
-                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Novo Lançamento</h3>
+                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>{editandoId !== null ? 'Editar Lançamento' : 'Novo Lançamento'}</h3>
                 {erroTransacao && <div style={{ backgroundColor: 'rgba(244,63,94,0.15)', color: 'var(--danger-text)', padding: '10px', borderRadius: '8px', fontSize: '12px', marginBottom: '16px' }}>{erroTransacao}</div>}
                 <form onSubmit={adicionarTransacao} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div>
@@ -1150,11 +1391,11 @@
                   <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
                     <div>
                       <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Valor (R$)</label>
-                      <input type="number" step="0.01" value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} required />
+                      <input type="text" inputMode="decimal" value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} required />
                     </div>
                     <div>
                       <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Tipo de Lançamento</label>
-                      <select value={tipo} onChange={e => setTipo(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }}>
+                      <select value={tipo} onChange={e => trocarTipo(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }}>
                         <option value="receita">Receita (Entrada)</option>
                         <option value="despesa">Despesa (Fixa/Essencial)</option>
                         <option value="gasto">Gasto (Variável/Extra)</option>
@@ -1165,17 +1406,23 @@
                     <div>
                       <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Categoria</label>
                       <select value={categoria} onChange={e => setCategoria(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }}>
-                        {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+                        {(categoriasDoTipo(tipo).includes(categoria) ? categoriasDoTipo(tipo) : [categoria, ...categoriasDoTipo(tipo)]).map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                     <div>
                       <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Data</label>
-                      <input type="date" value={dataTransacao} onChange={e => setDataTransacao(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }} />
+                      <input type="date" value={dataTransacao} onChange={e => setDataTransacao(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }} required />
                     </div>
                   </div>
+                  {editandoId === null && (
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text)', cursor: 'pointer', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 12px' }}>
+                      <input type="checkbox" checked={repetirMensal} onChange={e => setRepetirMensal(e.target.checked)} style={{ width: '18px', height: '18px', marginTop: '1px', accentColor: 'var(--accent)' }} />
+                      <span><strong>Repetir todo mês</strong><br /><span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Para contas fixas como aluguel, luz ou salário. O app lança sozinho no mesmo dia de cada mês.</span></span>
+                    </label>
+                  )}
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
-                    <button type="button" onClick={() => setModalTransacaoAberto(false)} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
-                    <button type="submit" style={estilos.buttonPrimary}>Guardar</button>
+                    <button type="button" onClick={fecharModalTransacao} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
+                    <button type="submit" style={estilos.buttonPrimary}>{editandoId !== null ? 'Salvar alterações' : 'Guardar'}</button>
                   </div>
                 </form>
               </div>
@@ -1185,7 +1432,8 @@
           {modalMetaAberto && (
             <div style={estilos.modalOverlay}>
               <div style={estilos.modalContent}>
-                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Nova Meta</h3>
+                <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>{editandoMetaId !== null ? 'Editar Meta' : 'Nova Meta'}</h3>
+                {erroMeta && <div style={{ backgroundColor: 'rgba(244,63,94,0.15)', color: 'var(--danger-text)', padding: '10px', borderRadius: '8px', fontSize: '12px', marginBottom: '16px' }}>{erroMeta}</div>}
                 <form onSubmit={adicionarMeta} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div>
                     <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Nome da Meta</label>
@@ -1194,16 +1442,16 @@
                   <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
                     <div>
                       <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Valor Desejado (R$)</label>
-                      <input type="number" step="0.01" value={objetivoMeta} onChange={e => setObjetivoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} required />
+                      <input type="text" inputMode="decimal" value={objetivoMeta} onChange={e => setObjetivoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} required />
                     </div>
                     <div>
                       <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Já Economizado</label>
-                      <input type="number" step="0.01" value={economizadoMeta} onChange={e => setEconomizadoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} />
+                      <input type="text" inputMode="decimal" value={economizadoMeta} onChange={e => setEconomizadoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} />
                     </div>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
-                    <button type="button" onClick={() => setModalMetaAberto(false)} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
-                    <button type="submit" style={estilos.buttonPrimary}>Criar Meta</button>
+                    <button type="button" onClick={fecharModalMeta} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
+                    <button type="submit" style={estilos.buttonPrimary}>{editandoMetaId !== null ? 'Salvar alterações' : 'Criar Meta'}</button>
                   </div>
                 </form>
               </div>
@@ -1222,8 +1470,8 @@
                   <div>
                     <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Limite Mensal (R$)</label>
                     <input 
-                      type="number" 
-                      step="0.01" 
+                      type="text" 
+                      inputMode="decimal" 
                       value={novoLimiteCategoria} 
                       onChange={e => setNovoLimiteCategoria(e.target.value)} 
                       placeholder="0,00" 
