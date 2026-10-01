@@ -158,7 +158,16 @@
     // ===== CONTA GOOGLE + CÓPIA NA NUVEM (Firebase / Google Cloud) =====
     // Desligado enquanto estiver null. Para ligar, crie o projeto no Firebase e cole aqui a
     // configuração do app da Web (passo a passo em COMO-ATIVAR-LOGIN.txt).
-    const FIREBASE_CONFIG = null;
+    // Projeto "EddFinanca" no Firebase. Estes valores não são segredo: eles identificam o projeto.
+    // Quem protege os dados são as regras do Firestore (firestore.rules): cada conta só vê os próprios dados.
+    const FIREBASE_CONFIG = {
+      apiKey: "AIzaSyCPcpIwAHllAwPhB05Sss5PqTUI4v_f400",
+      authDomain: "eddfinanca.firebaseapp.com",
+      projectId: "eddfinanca",
+      storageBucket: "eddfinanca.firebasestorage.app",
+      messagingSenderId: "859974679118",
+      appId: "1:859974679118:web:6d736679be96935ece611f"
+    };
     const FIREBASE_VERSAO = '10.12.2';
     let firebasePromessa = null;
     function carregarFirebase() {
