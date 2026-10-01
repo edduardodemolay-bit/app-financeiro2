@@ -7,9 +7,13 @@ O plano gratuito (Spark) do Firebase aguenta milhares de pessoas usando.
    - Abra https://console.firebase.google.com e entre com sua conta Google.
    - "Criar um projeto" > nome: eddfinanca > pode desligar o Google Analytics > Criar.
 
-2) LIGAR O LOGIN COM GOOGLE
+2) LIGAR O LOGIN (GOOGLE E E-MAIL COM SENHA)
    - Menu "Criação" > Authentication > "Vamos começar".
    - Aba "Método de login" > Google > Ativar > escolha seu e-mail de suporte > Salvar.
+   - Aba "Método de login" > Adicionar novo provedor > "E-mail/senha" > Ativar
+     (só a primeira chave; deixe "Link do e-mail" desligado) > Salvar.
+   - Aba "Modelos" (Templates) > idioma dos modelos: Português (Brasil).
+     Assim o e-mail de "Esqueci a senha" chega em português.
    - Aba "Configurações" > "Domínios autorizados" > Adicionar domínio:
        edduardodemolay-bit.github.io
      (e o domínio próprio, se você comprar um, ex.: eddfinanca.com.br)
@@ -32,7 +36,9 @@ O plano gratuito (Spark) do Firebase aguenta milhares de pessoas usando.
     Quem protege os dados são as regras do passo 3.)
 
 5) PRONTO
-   - Publique o index.html. No menu do app vai aparecer "Entrar ou criar conta com Google".
+   - Publique o index.html. A partir daí o app abre numa tela de entrada: "Entrar com Google",
+     ou e-mail e senha, "Criar conta" e "Esqueci a senha". Sem entrar, o app não abre.
+   - Quem já entrou uma vez num aparelho consegue abrir o app sem internet.
    - Quem entra fica registrado em Firestore > usuarios (nome, e-mail e a cópia dos dados).
    - Você vê a lista de cadastrados em Authentication > Users.
 
