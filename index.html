@@ -268,6 +268,16 @@
     const montarCategorias = (padrao, extras) => [...padrao.filter(c => c !== 'Outros'), ...(extras || []), 'Outros'];
     // O valor planejado de ganhos fica numa chave própria, porque "Outros" existe nos dois grupos
     const chaveLimite = (grupo, cat) => (grupo === 'entrada' ? 'prev:' + cat : cat);
+    // Categorias criadas: { entrada: [nomes], saida: [nomes], info: { 'saida:Pets': { criadaEm: 'AAAA-MM', confirmada, ate } } }
+    //  confirmada = a pessoa disse que a categoria continua nos próximos meses
+    //  ate        = a pessoa disse que era só até aquele mês (some do planejamento depois dele)
+    const normalizarExtras = (c) => ({ entrada: (c && c.entrada) || [], saida: (c && c.saida) || [], info: (c && c.info) || {} });
+    const chaveInfo = (grupo, cat) => grupo + ':' + cat;
+    // A categoria aparece no mês? Some só nos meses depois do "ate".
+    const categoriaValeNoMes = (extras, grupo, cat, mes) => {
+      const i = extras.info[chaveInfo(grupo, cat)];
+      return !(i && i.ate && mes > i.ate);
+    };
     const CORES_EXTRAS = [
       { bg: 'rgba(236, 72, 153, 0.15)', color: '#db2777', border: 'rgba(236, 72, 153, 0.3)' },
       { bg: 'rgba(132, 204, 22, 0.15)', color: '#65a30d', border: 'rgba(132, 204, 22, 0.3)' },
@@ -304,6 +314,16 @@
       return novas.map(m => (m.id === t.metaId ? { ...m, aportes: [...(m.aportes || []), { id: t.id, valor, data: t.date, transacaoId: t.id, tipo: t.metaMov, descricao: t.description }] } : m));
     }
     const entraNaConta = (t) => t.metaMov !== 'entrada';
+
+    // Datas de um lançamento que se repete a cada N dias, X vezes no total
+    function datasRepeticao(inicio, cadaDias, vezes) {
+      const base = new Date(inicio + 'T12:00:00');
+      return Array.from({ length: vezes }, (_, i) => {
+        const d = new Date(base);
+        d.setDate(base.getDate() + i * cadaDias);
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      });
+    }
 
     // Aceita "12,50", "1.234,56", "2.000" (dois mil) ou "12.5"
     const lerValor = (texto) => {
@@ -453,7 +473,8 @@
 
       const [mensagemNotificacao, setMensagemNotificacao] = useState(null);
 
-      const [anoCalendario, setAnoCalendario] = useState(new Date().getFullYear());
+      // Mês do meio do calendário (mostra o anterior, este e o próximo)
+      const [mesCalendario, setMesCalendario] = useState(mesDe(hojeISO()));
       const [diaSelecionado, setDiaSelecionado] = useState(hojeISO());
 
       const [modalTransacaoAberto, setModalTransacaoAberto] = useState(false);
@@ -465,6 +486,11 @@
       const [erroTransacao, setErroTransacao] = useState('');
       const [editandoId, setEditandoId] = useState(null);
       const [repetirMensal, setRepetirMensal] = useState(false);
+      // Repetir a cada X dias (ex.: feira toda semana), um número de vezes
+      const [repetirDias, setRepetirDias] = useState(false);
+      const [aCadaDias, setACadaDias] = useState('7');
+      const [vezesRepetir, setVezesRepetir] = useState('4');
+      const [doCalendario, setDoCalendario] = useState(false);
       // Para onde vai uma receita: 'conta' ou o id de uma meta
       const [destinoReceita, setDestinoReceita] = useState('conta');
 
@@ -478,14 +504,16 @@
       const [categoriaEditando, setCategoriaEditando] = useState('Alimentação');
       const [novoLimiteCategoria, setNovoLimiteCategoria] = useState('');
       // Categorias criadas pela pessoa: { entrada: [...], saida: [...] }
-      const [categoriasExtras, setCategoriasExtras] = useState({ entrada: [], saida: [] });
+      const [categoriasExtras, setCategoriasExtras] = useState({ entrada: [], saida: [], info: {} });
       const [grupoEditando, setGrupoEditando] = useState('saida');
       const [criandoCategoria, setCriandoCategoria] = useState(false);
       const [nomeCategoriaEdit, setNomeCategoriaEdit] = useState('');
       const [erroCategoria, setErroCategoria] = useState('');
       const catEntrada = montarCategorias(CATEGORIAS_ENTRADA, categoriasExtras.entrada);
       const catSaida = montarCategorias(CATEGORIAS_SAIDA, categoriasExtras.saida);
-      const categoriasDoTipo = (t) => (t === 'receita' ? catEntrada : catSaida);
+      // Categorias que valem num mês (as marcadas "só até tal mês" somem depois dele)
+      const catDoMes = (grupo, mes) => (grupo === 'entrada' ? catEntrada : catSaida).filter(c => categoriaValeNoMes(categoriasExtras, grupo, c, mes));
+      const categoriasDoTipo = (t) => catDoMes(t === 'receita' ? 'entrada' : 'saida', mesDe(dataTransacao));
       const ehCategoriaCriada = (grupo, cat) => (categoriasExtras[grupo] || []).includes(cat);
 
       // Histórico de registros: quem fez o quê e quando (fica no menu)
@@ -519,7 +547,7 @@
                 if (dadosDoDisco.transacoes) setTransacoes(dadosDoDisco.transacoes);
                 if (dadosDoDisco.limitesCategorias) setLimitesCategorias(prev => ({ ...prev, ...dadosDoDisco.limitesCategorias }));
                 if (dadosDoDisco.metas) setMetas(dadosDoDisco.metas.map(normalizarMeta));
-                if (dadosDoDisco.categoriasExtras) setCategoriasExtras({ entrada: dadosDoDisco.categoriasExtras.entrada || [], saida: dadosDoDisco.categoriasExtras.saida || [] });
+                if (dadosDoDisco.categoriasExtras) setCategoriasExtras(normalizarExtras(dadosDoDisco.categoriasExtras));
                 return;
               }
             } catch (e) {
@@ -534,7 +562,7 @@
             const l = localStorage.getItem('@finapp_limitesCategorias');
             if (l) setLimitesCategorias(prev => ({ ...prev, ...JSON.parse(l) }));
             const ce = localStorage.getItem('@finapp_categorias');
-            if (ce) { const c = JSON.parse(ce); setCategoriasExtras({ entrada: c.entrada || [], saida: c.saida || [] }); }
+            if (ce) setCategoriasExtras(normalizarExtras(JSON.parse(ce)));
             const h = localStorage.getItem('@finapp_historico');
             if (h) setHistorico(JSON.parse(h));
             // Metas zeradas a pedido do usuário (uma única vez): remove as metas salvas neste aparelho.
@@ -622,7 +650,7 @@
         const lista = Array.isArray(d.transacoes) ? d.transacoes : [];
         const novasMetas = Array.isArray(d.metas) ? d.metas.map(normalizarMeta) : [];
         const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes : [];
-        const novasExtras = d.categoriasExtras ? { entrada: d.categoriasExtras.entrada || [], saida: d.categoriasExtras.saida || [] } : { entrada: [], saida: [] };
+        const novasExtras = normalizarExtras(d.categoriasExtras);
         const novosLimites = { ...(d.limitesCategorias || {}) };
         const novoHistorico = Array.isArray(d.historico) ? d.historico : [];
         setTransacoes(lista); setMetas(novasMetas); setRecorrentes(novosRecorrentes);
@@ -729,7 +757,12 @@
       const saldoAcumulado = somar(transacoesAteMes.filter(t => t.type === 'receita' && entraNaConta(t))) - somar(transacoesAteMes.filter(t => t.type !== 'receita'));
 
       // "Metas" (aportes) fica fora do planejamento: é dinheiro guardado, não gasto
-      const categoriasDeGastos = catSaida;
+      const categoriasDeGastos = catDoMes('saida', mesSelecionado);
+      const categoriasDeGanhos = catDoMes('entrada', mesSelecionado);
+      // Categorias criadas em meses anteriores que ainda esperam resposta: "continua neste mês?"
+      const categoriasPerguntar = ['entrada', 'saida'].flatMap(grupo => (categoriasExtras[grupo] || [])
+        .filter(cat => { const i = categoriasExtras.info[chaveInfo(grupo, cat)]; return i && i.criadaEm && !i.confirmada && !i.ate && mesSelecionado > i.criadaEm; })
+        .map(cat => ({ grupo, cat, criadaEm: categoriasExtras.info[chaveInfo(grupo, cat)].criadaEm })));
 
       const gastosPorCategoria = categoriasDeGastos.reduce((acc, cat) => {
         acc[cat] = somar(transacoesDoMes.filter(t => (t.type === 'despesa' || t.type === 'gasto') && t.category === cat));
@@ -742,11 +775,11 @@
       const percentualOrcamento = orcamentoTotalPlanejado > 0 ? (totalGastoGeral / orcamentoTotalPlanejado) * 100 : 0;
 
       // Planejamento de ganhos: quanto se espera receber em cada categoria de entrada
-      const ganhosPorCategoria = catEntrada.reduce((acc, cat) => {
+      const ganhosPorCategoria = categoriasDeGanhos.reduce((acc, cat) => {
         acc[cat] = somar(transacoesDoMes.filter(t => t.type === 'receita' && t.category === cat && t.metaMov !== 'retirada'));
         return acc;
       }, {});
-      const ganhosPrevistos = catEntrada.reduce((a, cat) => a + Number(limitesCategorias[chaveLimite('entrada', cat)] || 0), 0);
+      const ganhosPrevistos = categoriasDeGanhos.reduce((a, cat) => a + Number(limitesCategorias[chaveLimite('entrada', cat)] || 0), 0);
       const ganhosRecebidos = Object.values(ganhosPorCategoria).reduce((a, b) => a + b, 0);
 
       // O orçamento do mês cresce a cada receita que entra na conta
@@ -808,7 +841,12 @@
         let novasMetas = metas;
         let afetadas = [];
 
-        const qtdParcelas = Math.floor(Number(parcelas) || 1);
+        const usarDias = editandoId === null && repetirDias && !repetirMensal;
+        const cadaDias = Math.floor(Number(aCadaDias));
+        const vezes = Math.floor(Number(vezesRepetir));
+        if (usarDias && (!(cadaDias >= 1) || cadaDias > 365)) { setErroTransacao('Repita a cada 1 a 365 dias.'); return; }
+        if (usarDias && (!(vezes >= 2) || vezes > 60)) { setErroTransacao('Escolha de 2 a 60 vezes no total.'); return; }
+        const qtdParcelas = usarDias ? 1 : Math.floor(Number(parcelas) || 1);
         if (editandoId === null && tipo !== 'receita' && !repetirMensal && (qtdParcelas < 1 || qtdParcelas > 48)) { setErroTransacao('Parcele em 1 a 48 vezes.'); return; }
         if (editandoId !== null) {
           dados.editadoPor = nomeAutor;
@@ -819,6 +857,11 @@
         if (editandoId !== null) {
           novasTransacoes = ordenarPorData(transacoes.map(t => (t.id === editandoId ? { ...t, ...dados } : t)));
           afetadas = novasTransacoes.filter(t => t.id === editandoId);
+        } else if (usarDias) {
+          // Repete a cada N dias: cria todos de uma vez; os de data futura ficam como agendados
+          const grupo = Date.now();
+          afetadas = datasRepeticao(dataTransacao, cadaDias, vezes).map((data, i) => ({ ...dados, id: grupo + i, date: data, repeticaoGrupo: grupo, repeticao: 'a cada ' + cadaDias + ' dias' }));
+          novasTransacoes = ordenarPorData([...afetadas, ...transacoes]);
         } else if (!repetirMensal && tipo !== 'receita' && qtdParcelas > 1) {
           // Compra parcelada: uma parcela por mês; a última ajusta os centavos
           const grupo = Date.now();
@@ -853,10 +896,10 @@
         const negativa = metaFicaNegativa(novasMetas);
         if (negativa) { setErroTransacao(avisoMetaNegativa(negativa)); return; }
 
-        const parcelado = editandoId === null && !repetirMensal && tipo !== 'receita' && qtdParcelas > 1;
+        const parcelado = editandoId === null && !repetirMensal && !usarDias && tipo !== 'receita' && qtdParcelas > 1;
         const hist = anotar(
-          editandoId !== null ? 'Editou lançamento' : parcelado ? 'Lançou compra parcelada' : repetirMensal ? 'Criou conta fixa' : 'Lançou ' + (tipo === 'receita' ? 'receita' : tipo === 'despesa' ? 'despesa' : 'gasto'),
-          dados.description + ' · ' + formatarMoeda(dados.amount) + (parcelado ? ' em ' + qtdParcelas + 'x' : '') + ' · ' + dados.category
+          editandoId !== null ? 'Editou lançamento' : usarDias ? 'Lançou com repetição' : parcelado ? 'Lançou compra parcelada' : repetirMensal ? 'Criou conta fixa' : 'Lançou ' + (tipo === 'receita' ? 'receita' : tipo === 'despesa' ? 'despesa' : 'gasto'),
+          dados.description + ' · ' + formatarMoeda(dados.amount) + (parcelado ? ' em ' + qtdParcelas + 'x' : '') + (usarDias ? ' · a cada ' + cadaDias + ' dias, ' + vezes + ' vezes' : '') + ' · ' + dados.category
         );
 
         setTransacoes(novasTransacoes);
@@ -864,7 +907,7 @@
         fecharModalTransacao();
         salvarTudoNoDisco({ transacoes: novasTransacoes, recorrentes: novosRecorrentes, metas: novasMetas, historico: hist });
         const metaMsg = dados.metaMov === 'entrada' ? ' e somada à meta' : '';
-        exibirNotificacao((editandoId !== null ? 'Lançamento atualizado' : parcelado ? 'Compra lançada em ' + qtdParcelas + ' parcelas' : repetirMensal ? 'Conta fixa criada: repete todo mês' : 'Lançamento guardado') + metaMsg);
+        exibirNotificacao((editandoId !== null ? 'Lançamento atualizado' : usarDias ? vezes + ' lançamentos criados, a cada ' + cadaDias + ' dias' : parcelado ? 'Compra lançada em ' + qtdParcelas + ' parcelas' : repetirMensal ? 'Conta fixa criada: repete todo mês' : 'Lançamento guardado') + metaMsg);
       }
 
       // Salva direto o que o lançamento rápido entendeu
@@ -922,6 +965,8 @@
         setModalTransacaoAberto(false);
         setEditandoId(null);
         setRepetirMensal(false);
+        setRepetirDias(false);
+        setDoCalendario(false);
         setDestinoReceita('conta');
         setParcelas('1');
         setDescricao(''); setValor(''); setErroTransacao('');
@@ -1179,6 +1224,19 @@
         const nome = podeRenomear ? nomeCategoriaEdit.trim().replace(/\s+/g, ' ') : categoriaEditando;
         if (!nome) { setErroCategoria('Dê um nome para a categoria, por exemplo "Pets" ou "Freelance".'); return; }
         if (nome.length > 30) { setErroCategoria('Use um nome com até 30 letras.'); return; }
+        // Recriar uma categoria que tinha ficado "só naquele mês" volta a usá-la
+        const parada = criandoCategoria && (categoriasExtras[grupo] || []).find(c => c.toLowerCase() === nome.toLowerCase() && (categoriasExtras.info[chaveInfo(grupo, c)] || {}).ate);
+        if (parada) {
+          const novasExtras2 = { ...categoriasExtras, info: { ...categoriasExtras.info, [chaveInfo(grupo, parada)]: { ...categoriasExtras.info[chaveInfo(grupo, parada)], confirmada: true, ate: null } } };
+          const novosLimites2 = { ...limitesCategorias, [chaveLimite(grupo, parada)]: val };
+          setCategoriasExtras(novasExtras2);
+          setLimitesCategorias(novosLimites2);
+          fecharCategoria();
+          const hist2 = anotar('Voltou a usar categoria', parada + ' · ' + formatarMoeda(val));
+          salvarTudoNoDisco({ categoriasExtras: novasExtras2, limitesCategorias: novosLimites2, historico: hist2 });
+          exibirNotificacao('"' + parada + '" voltou a valer a partir de agora');
+          return;
+        }
         const todas = [...catEntrada, ...catSaida, 'Metas'].filter(c => c !== categoriaEditando);
         if (nome !== categoriaEditando && todas.some(c => c.toLowerCase() === nome.toLowerCase())) { setErroCategoria('Já existe uma categoria chamada "' + nome + '".'); return; }
 
@@ -1186,9 +1244,12 @@
         let novasExtras = categoriasExtras;
         let novos = { transacoes, recorrentes };
         if (criandoCategoria) {
-          novasExtras = { ...categoriasExtras, [grupo]: [...(categoriasExtras[grupo] || []), nome] };
+          // Guarda o mês em que nasceu: no mês seguinte o app pergunta se ela continua
+          novasExtras = { ...categoriasExtras, [grupo]: [...(categoriasExtras[grupo] || []), nome], info: { ...categoriasExtras.info, [chaveInfo(grupo, nome)]: { criadaEm: mesSelecionado, confirmada: false } } };
         } else if (nome !== categoriaEditando) {
-          novasExtras = { ...categoriasExtras, [grupo]: categoriasExtras[grupo].map(c => (c === categoriaEditando ? nome : c)) };
+          const info = { ...categoriasExtras.info };
+          if (info[chaveInfo(grupo, categoriaEditando)]) { info[chaveInfo(grupo, nome)] = info[chaveInfo(grupo, categoriaEditando)]; delete info[chaveInfo(grupo, categoriaEditando)]; }
+          novasExtras = { ...categoriasExtras, [grupo]: categoriasExtras[grupo].map(c => (c === categoriaEditando ? nome : c)), info };
           delete novosLimites[chaveLimite(grupo, categoriaEditando)];
           novos = trocarCategoriaNosLancamentos(grupo, categoriaEditando, nome);
         }
@@ -1204,12 +1265,26 @@
         exibirNotificacao(criandoCategoria ? 'Categoria "' + nome + '" criada' : 'Categoria atualizada');
       }
 
+      // Resposta à pergunta "a categoria continua nos próximos meses?"
+      function responderCategoria(grupo, cat, continua) {
+        const chave = chaveInfo(grupo, cat);
+        const atual = categoriasExtras.info[chave] || {};
+        const novoInfo = continua ? { ...atual, confirmada: true, ate: null } : { ...atual, confirmada: false, ate: atual.criadaEm };
+        const novasExtras = { ...categoriasExtras, info: { ...categoriasExtras.info, [chave]: novoInfo } };
+        setCategoriasExtras(novasExtras);
+        const hist = anotar(continua ? 'Manteve categoria nos próximos meses' : 'Deixou categoria só no mês em que criou', cat + (continua ? '' : ' · ' + nomeDoMes(atual.criadaEm)));
+        salvarTudoNoDisco({ categoriasExtras: novasExtras, historico: hist });
+        exibirNotificacao(continua ? '"' + cat + '" continua nos próximos meses' : '"' + cat + '" fica só em ' + nomeDoMes(atual.criadaEm).toLowerCase());
+      }
+
       function excluirCategoria() {
         const grupo = grupoEditando, cat = categoriaEditando;
         if (!ehCategoriaCriada(grupo, cat)) return;
         const usados = transacoes.filter(t => t.category === cat).length;
         if (!confirm('Excluir a categoria "' + cat + '"?' + (usados ? ' Os ' + usados + ' lançamentos dela passam para "Outros".' : ''))) return;
-        const novasExtras = { ...categoriasExtras, [grupo]: categoriasExtras[grupo].filter(c => c !== cat) };
+        const infoSem = { ...categoriasExtras.info };
+        delete infoSem[chaveInfo(grupo, cat)];
+        const novasExtras = { ...categoriasExtras, [grupo]: categoriasExtras[grupo].filter(c => c !== cat), info: infoSem };
         const novosLimites = { ...limitesCategorias };
         delete novosLimites[chaveLimite(grupo, cat)];
         const novos = trocarCategoriaNosLancamentos(grupo, cat, 'Outros');
@@ -1223,9 +1298,11 @@
         exibirNotificacao('Categoria excluída');
       }
 
-      const abrirModalComData = (dataFormatted) => {
+      const abrirModalComData = (dataFormatted, peloCalendario = false) => {
         setEditandoId(null);
         setRepetirMensal(false);
+        setRepetirDias(false);
+        setDoCalendario(peloCalendario);
         setDestinoReceita('conta');
         setDescricao(''); setValor(''); setErroTransacao('');
         setDataTransacao(dataFormatted);
@@ -1315,7 +1392,7 @@
             setLimitesCategorias(limites);
             setMetas(novasMetas);
             setRecorrentes(novosRecorrentes);
-            const novasExtras = d.categoriasExtras ? { entrada: d.categoriasExtras.entrada || [], saida: d.categoriasExtras.saida || [] } : categoriasExtras;
+            const novasExtras = d.categoriasExtras ? normalizarExtras(d.categoriasExtras) : categoriasExtras;
             setCategoriasExtras(novasExtras);
             const hist = anotar('Importou backup', d.transacoes.length + ' lançamentos');
             salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, historico: hist });
@@ -1376,10 +1453,38 @@
           <React.Fragment>
             {meta && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(168, 85, 247, 0.15)', color: 'var(--c-purple)', fontWeight: '700' }}>→ Meta: {meta.nome}</span>}
             {t.exemplo && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--c-sky)', color: 'var(--c-sky)', fontWeight: '700', textTransform: 'uppercase' }}>Exemplo</span>}
+            {t.repeticao && <span title="Lançamento que se repete" style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Repeat size={11} /> {t.repeticao}</span>}
             {t.autor && <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>por {t.autor}</span>}
           </React.Fragment>
         );
       };
+
+      // Resumo das datas quando o lançamento se repete a cada N dias
+      const resumoRepeticao = (() => {
+        const n = Math.floor(Number(aCadaDias)), v = Math.floor(Number(vezesRepetir));
+        if (!repetirDias || !(n >= 1 && n <= 365) || !(v >= 2 && v <= 60) || !dataTransacao) return '';
+        const datas = datasRepeticao(dataTransacao, n, v);
+        const curtas = datas.map(d => formatarDataBR(d).slice(0, 5));
+        const lista = curtas.length > 5 ? curtas.slice(0, 4).join(', ') + ' … ' + curtas[curtas.length - 1] : curtas.slice(0, -1).join(', ') + ' e ' + curtas[curtas.length - 1];
+        const val = lerValor(valor);
+        return v + ' lançamentos: ' + lista + (isNaN(val) ? '' : ' · total ' + formatarMoeda(val * v)) + '. Os de data futura ficam como agendados.';
+      })();
+
+      // Pergunta, no mês seguinte, se as categorias criadas continuam
+      const avisoCategorias = categoriasPerguntar.length > 0 && (
+        <div style={{ backgroundColor: 'rgba(var(--accent-rgb), 0.08)', border: '1px solid rgba(var(--accent-rgb), 0.35)', borderRadius: '14px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <strong style={{ fontSize: '14px', color: 'var(--text-strong)' }}>Novo mês: estas categorias continuam?</strong>
+          {categoriasPerguntar.map(p => (
+            <div key={p.grupo + p.cat} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', fontSize: '13px' }}>
+              <span style={{ color: 'var(--text)' }}>Você criou <strong>{p.cat}</strong> ({p.grupo === 'entrada' ? 'ganho' : 'gasto'}) em {nomeDoMes(p.criadaEm).toLowerCase()}. Usar também em {nomeDoMes(mesSelecionado).toLowerCase()} e nos próximos meses?</span>
+              <span style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => responderCategoria(p.grupo, p.cat, false)} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text)', borderRadius: '10px', padding: '6px 12px', fontWeight: '600', fontSize: '12px', cursor: 'pointer' }}>Não, era só daquele mês</button>
+                <button onClick={() => responderCategoria(p.grupo, p.cat, true)} style={{ ...estilos.buttonPrimary, padding: '6px 12px', fontSize: '12px' }}>Sim, manter</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      );
 
       const botaoNovaCategoria = { background: 'none', border: '1px dashed var(--accent)', color: 'var(--accent-text)', borderRadius: '10px', padding: '8px 12px', fontWeight: '700', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' };
       const tituloSecao = { fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' };
@@ -1613,6 +1718,8 @@
                   </div>
 
                   {seletorMes}
+
+                  {avisoCategorias}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '20px' }}>
                     <div style={estilos.card}>
                       <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Saldo do Mês</p>
@@ -1777,6 +1884,7 @@
               {abaAtiva === 'orcamento' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
                   {seletorMes}
+                  {avisoCategorias}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '20px' }}>
                     <div style={estilos.card}>
                       <p style={tituloSecao}>Orçamento do Mês</p>
@@ -1824,7 +1932,7 @@
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: '20px' }}>
-                      {catEntrada.map(cat => {
+                      {categoriasDeGanhos.map(cat => {
                         const previsto = Number(limitesCategorias[chaveLimite('entrada', cat)] || 0);
                         const recebido = ganhosPorCategoria[cat] || 0;
                         const pct = previsto > 0 ? (recebido / previsto) * 100 : 0;
@@ -2208,15 +2316,18 @@
               {abaAtiva === 'calendario' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
                   
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--card)', padding: '20px 24px', borderRadius: '16px', border: '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                      <button onClick={() => setAnoCalendario(anoCalendario - 1)} style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-strong)', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '14px', flexWrap: 'wrap', backgroundColor: 'var(--card)', padding: isMobile ? '14px' : '20px 24px', borderRadius: '16px', border: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                      <button onClick={() => setMesCalendario(somarMeses(mesCalendario, -1))} aria-label="Mês anterior" style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-strong)', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
                         <ChevronLeft size={20} />
                       </button>
-                      <h3 style={{ fontSize: '22px', fontWeight: '800', margin: 0, color: 'var(--accent)' }}>{anoCalendario}</h3>
-                      <button onClick={() => setAnoCalendario(anoCalendario + 1)} style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-strong)', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                      <h3 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '800', margin: 0, color: 'var(--accent)' }}>{nomeDoMes(mesCalendario)}</h3>
+                      <button onClick={() => setMesCalendario(somarMeses(mesCalendario, 1))} aria-label="Próximo mês" style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-strong)', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
                         <ChevronRight size={20} />
                       </button>
+                      {mesCalendario !== mesAtual && (
+                        <button onClick={() => { setMesCalendario(mesAtual); setDiaSelecionado(hojeISO()); }} style={{ background: 'none', border: 'none', color: 'var(--accent-text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>Voltar para hoje</button>
+                      )}
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -2224,7 +2335,7 @@
                         <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>Dia Selecionado:</p>
                         <strong style={{ fontSize: '16px', color: 'var(--text-strong)' }}>{formatarDataBR(diaSelecionado)}</strong>
                       </div>
-                      <button onClick={() => abrirModalComData(diaSelecionado)} style={{ ...estilos.buttonPrimary, padding: '10px 16px', fontSize: '13px' }}>
+                      <button onClick={() => abrirModalComData(diaSelecionado, true)} style={{ ...estilos.buttonPrimary, padding: '10px 16px', fontSize: '13px' }}>
                         <Plus size={16} /> Lançar neste dia
                       </button>
                     </div>
@@ -2265,15 +2376,20 @@
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: '20px' }}>
-                    {NOMES_MESES.map((nomeMes, idxMes) => {
-                      const { primeiroDia, totalDias } = gerarDiasDoMes(anoCalendario, idxMes);
+                    {/* Só o mês anterior, o atual e o próximo; as setas andam de mês em mês */}
+                    {[-1, 0, 1].map(desloc => {
+                      const mesChave = somarMeses(mesCalendario, desloc);
+                      const anoCal = Number(mesChave.slice(0, 4));
+                      const idxMes = Number(mesChave.slice(5, 7)) - 1;
+                      const { primeiroDia, totalDias } = gerarDiasDoMes(anoCal, idxMes);
                       const diasEmBranco = Array.from({ length: primeiroDia });
                       const diasDoMes = Array.from({ length: totalDias }, (_, i) => i + 1);
+                      const central = desloc === 0;
 
                       return (
-                        <div key={nomeMes} style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)', borderRadius: '16px', padding: '16px' }}>
-                          <h4 style={{ margin: '0 0 12px 0', textAlign: 'center', color: 'var(--c-sky)', fontSize: '15px', fontWeight: 'bold' }}>
-                            {nomeMes}
+                        <div key={mesChave} style={{ backgroundColor: 'var(--card)', border: central ? '2px solid var(--accent)' : '1px solid var(--border)', borderRadius: '16px', padding: '16px' }}>
+                          <h4 style={{ margin: '0 0 12px 0', textAlign: 'center', color: central ? 'var(--accent-text)' : 'var(--c-sky)', fontSize: '15px', fontWeight: 'bold' }}>
+                            {desloc === -1 ? 'Anterior · ' : desloc === 1 ? 'Próximo · ' : ''}{nomeDoMes(mesChave)}
                           </h4>
 
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', fontSize: '11px', color: 'var(--text-faint)', fontWeight: 'bold', marginBottom: '8px' }}>
@@ -2285,9 +2401,8 @@
                               <div key={`blank-${i}`} />
                             ))}
                             {diasDoMes.map(dia => {
-                              const mesFormatado = String(idxMes + 1).padStart(2, '0');
                               const diaFormatado = String(dia).padStart(2, '0');
-                              const dataChave = `${anoCalendario}-${mesFormatado}-${diaFormatado}`;
+                              const dataChave = `${mesChave}-${diaFormatado}`;
                               
                               const itensDoDia = transacoesPorDia[dataChave] || [];
                               const temEntrada = itensDoDia.some(t => t.type === 'receita');
@@ -2388,12 +2503,30 @@
                     </div>
                   </div>
                   {editandoId === null && (
-                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text)', cursor: 'pointer', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <input type="checkbox" checked={repetirMensal} onChange={e => setRepetirMensal(e.target.checked)} style={{ width: '18px', height: '18px', marginTop: '1px', accentColor: 'var(--accent)' }} />
-                      <span><strong>Repetir todo mês</strong><br /><span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Para contas fixas como aluguel, luz ou salário. O app lança sozinho no mesmo dia de cada mês.</span></span>
-                    </label>
+                    <div style={{ backgroundColor: 'var(--bg)', border: doCalendario ? '1px solid var(--accent)' : '1px solid var(--border)', borderRadius: '10px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <label htmlFor="repeticao" style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text)' }}>{doCalendario ? 'Este lançamento se repete?' : 'Repetir'}</label>
+                      <select id="repeticao" value={repetirMensal ? 'mensal' : repetirDias ? 'dias' : 'nao'} onChange={e => { setRepetirMensal(e.target.value === 'mensal'); setRepetirDias(e.target.value === 'dias'); }} style={estilos.input}>
+                        <option value="nao">Não repete (só esta vez)</option>
+                        <option value="dias">Sim, a cada alguns dias</option>
+                        <option value="mensal">Sim, todo mês no mesmo dia (conta fixa)</option>
+                      </select>
+                      {repetirDias && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', fontSize: '13px', color: 'var(--text)' }}>
+                          <label htmlFor="a-cada-dias">A cada</label>
+                          <input id="a-cada-dias" type="number" inputMode="numeric" min="1" max="365" value={aCadaDias} onChange={e => setACadaDias(e.target.value)} style={{ ...estilos.input, width: '70px' }} />
+                          <span>dias,</span>
+                          <input id="vezes-repetir" type="number" inputMode="numeric" min="2" max="60" value={vezesRepetir} onChange={e => setVezesRepetir(e.target.value)} style={{ ...estilos.input, width: '70px' }} aria-label="Quantas vezes no total" />
+                          <label htmlFor="vezes-repetir">vezes no total</label>
+                        </div>
+                      )}
+                      <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                        {repetirMensal ? 'Para contas fixas como aluguel, luz ou salário. O app lança sozinho no mesmo dia de cada mês.'
+                          : repetirDias ? (resumoRepeticao || 'Ex.: a cada 7 dias para a feira, a cada 15 dias para a diarista.')
+                          : 'Escolha "a cada alguns dias" para coisas como feira semanal, diarista ou remédio.'}
+                      </span>
+                    </div>
                   )}
-                  {editandoId === null && tipo !== 'receita' && !repetirMensal && (
+                  {editandoId === null && tipo !== 'receita' && !repetirMensal && !repetirDias && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                       <label htmlFor="parcelas" style={{ fontSize: '13px', color: 'var(--text)', fontWeight: '600' }}>Parcelar em</label>
                       <input id="parcelas" type="number" inputMode="numeric" min="1" max="48" value={parcelas} onChange={e => setParcelas(e.target.value)} style={{ ...estilos.input, width: '80px' }} />
