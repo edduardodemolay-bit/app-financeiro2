@@ -1,6 +1,6 @@
 {
-  "name": "EDD Finanças",
-  "short_name": "EDD Finanças",
+  "name": "EddFinança",
+  "short_name": "EddFinança",
   "description": "Gestão financeira pessoal",
   "start_url": "./index.html",
   "scope": "./",
