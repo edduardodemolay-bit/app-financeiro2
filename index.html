@@ -531,11 +531,9 @@
       // Lançamento rápido por texto ou voz
       const [textoRapido, setTextoRapido] = useState('');
       const [previaRapida, setPreviaRapida] = useState(null);
+      // "ouvindo" = o teclado foi aberto pelo 🎤 e a dica de falar está na tela
       const [ouvindo, setOuvindo] = useState(false);
-      const reconhecedorRef = useRef(null);
       const [avisoVoz, setAvisoVoz] = useState('');
-      // Lembra que o celular já liberou o microfone (para não pedir de novo)
-      const micLiberado = useRef((() => { try { return localStorage.getItem('@finapp_mic') === '1'; } catch (e) { return false; } })());
 
       // Parcelamento de compras
       const [parcelas, setParcelas] = useState('1');
@@ -943,93 +941,28 @@
         setTextoRapido('');
       }
 
-      // ===== VOZ =====
-      // 1º toque: pede a permissão do microfone ao celular (janela do próprio aparelho).
-      // Depois: escuta, mostra o texto enquanto a pessoa fala e entende o lançamento no fim.
-      const ehIphone = /iPhone|iPad|iPod/i.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-      const appInstalado = typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches;
-      const usarTecladoParaFalar = (motivo) => {
-        setAvisoVoz(motivo + ' Você ainda pode falar: toque no campo acima e use o 🎤 do teclado do celular.');
+      // ===== VOZ (sem pedir permissão) =====
+      // O 🎤 do app abre o teclado no campo de lançamento rápido; a pessoa fala pelo 🎤 do próprio
+      // teclado (Gboard, ditado do iPhone), que já tem permissão no celular. Assim o site nunca
+      // pede acesso ao microfone. Quando ela para de falar, o app entende sozinho.
+      function ouvirVoz() {
         const campo = document.getElementById && document.getElementById('texto-rapido');
         if (campo && campo.focus) campo.focus();
-      };
-      const mensagemErroVoz = (codigo) => {
-        if (codigo === 'not-allowed' || codigo === 'permissao') {
-          return ehIphone
-            ? 'O microfone está bloqueado para o app. No iPhone: Ajustes > Safari > Microfone > Permitir (e Ajustes > Privacidade > Reconhecimento de Fala). Depois toque no 🎤 de novo.'
-            : 'O microfone está bloqueado para o app. Toque no cadeado ao lado do endereço (ou em ⋮ > Configurações do site) > Microfone > Permitir. Depois toque no 🎤 de novo.';
-        }
-        if (codigo === 'service-not-allowed') return ehIphone ? 'O iPhone não liberou o reconhecimento de voz. Ligue o Ditado em Ajustes > Geral > Teclado > Ativar Ditado.' : 'O reconhecimento de voz do navegador está desligado.';
-        if (codigo === 'no-speech') return 'Não ouvi nada. Toque no 🎤 e comece a falar logo em seguida, perto do celular.';
-        if (codigo === 'audio-capture') return 'Não encontrei o microfone. Veja se outro app (ligação, gravador) está usando o microfone.';
-        if (codigo === 'network') return 'O reconhecimento de voz precisa de internet. Verifique a conexão e tente de novo.';
-        return 'Não consegui ouvir. Tente de novo.';
-      };
-
-      function iniciarReconhecimento() {
-        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const rec = new SR();
-        rec.lang = 'pt-BR';
-        rec.interimResults = true;   // mostra o texto enquanto a pessoa fala
-        rec.continuous = false;
-        rec.maxAlternatives = 1;
-        let ouvido = '';
-        let erro = '';
-        rec.onresult = (ev) => {
-          // Usa só o resultado mais recente: em alguns Androids os parciais vêm repetidos
-          const ultimo = ev.results[ev.results.length - 1];
-          ouvido = String((ultimo && ultimo[0] && ultimo[0].transcript) || '').trim();
-          setTextoRapido(ouvido);
-          setPreviaRapida(null);
-        };
-        rec.onerror = (ev) => { erro = (ev && ev.error) || 'erro'; };
-        rec.onend = () => {
-          setOuvindo(false);
-          reconhecedorRef.current = null;
-          if (ouvido) { setAvisoVoz(''); interpretarRapido(ouvido); return; }
-          if (erro === 'aborted') return;
-          if (erro === 'service-not-allowed' || (ehIphone && appInstalado && erro === 'not-allowed')) {
-            usarTecladoParaFalar(ehIphone && appInstalado
-              ? 'No iPhone, o reconhecimento de voz não funciona com o app aberto pela tela de início (limite da Apple).'
-              : mensagemErroVoz(erro));
-            return;
-          }
-          if (erro === 'not-allowed') { micLiberado.current = false; try { localStorage.removeItem('@finapp_mic'); } catch (e) {} }
-          setAvisoVoz(mensagemErroVoz(erro || 'no-speech'));
-        };
-        reconhecedorRef.current = rec;
-        setAvisoVoz('');
         setOuvindo(true);
-        try { rec.start(); }
-        catch (e) { setOuvindo(false); reconhecedorRef.current = null; setAvisoVoz(mensagemErroVoz('erro')); }
+        setAvisoVoz('');
       }
 
-      function ouvirVoz() {
-        if (ouvindo && reconhecedorRef.current) { reconhecedorRef.current.stop(); return; }
-        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SR) {
-          usarTecladoParaFalar(ehIphone && appInstalado
-            ? 'No iPhone, o reconhecimento de voz não funciona com o app aberto pela tela de início (limite da Apple).'
-            : 'Este navegador não tem reconhecimento de voz (funciona no Chrome e no Safari).');
-          return;
-        }
-        // Primeira vez: pede a permissão do microfone ao celular antes de escutar
-        if (!micLiberado.current && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          setAvisoVoz('Permita o uso do microfone na janela do celular…');
-          navigator.mediaDevices.getUserMedia({ audio: true })
-            .then((fluxo) => {
-              fluxo.getTracks().forEach(t => t.stop());
-              micLiberado.current = true;
-              try { localStorage.setItem('@finapp_mic', '1'); } catch (e) {}
-              iniciarReconhecimento();
-            })
-            .catch((e) => {
-              const nome = e && e.name;
-              setAvisoVoz(mensagemErroVoz(nome === 'NotFoundError' ? 'audio-capture' : 'permissao'));
-            });
-          return;
-        }
-        iniciarReconhecimento();
+      // Entende sozinho ~1 s depois que a pessoa para de falar ou digitar
+      const timerRapido = useRef(null);
+      function mudarTextoRapido(texto) {
+        setTextoRapido(texto);
+        setPreviaRapida(null);
+        clearTimeout(timerRapido.current);
+        if (!/\d|\bmil\b/i.test(texto)) return;
+        timerRapido.current = setTimeout(() => {
+          const r = interpretarTexto(texto, catEntrada, catSaida, hojeISO());
+          if (r) { setPreviaRapida(r); setOuvindo(false); }
+        }, 1100);
       }
 
       function fecharModalTransacao() {
@@ -1759,14 +1692,14 @@
                   <div style={estilos.card}>
                     <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}><Zap size={16} color="var(--accent)" /> Lançamento rápido</h3>
                     <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 12px 0' }}>Escreva ou fale do seu jeito: "gastei 46 na padaria", "recebi 3500 de salário", "paguei 120 de luz ontem".</p>
-                    <form onSubmit={e => { e.preventDefault(); interpretarRapido(textoRapido); }} style={{ display: 'flex', gap: '8px' }}>
-                      <input id="texto-rapido" type="text" value={textoRapido} onChange={e => { setTextoRapido(e.target.value); setPreviaRapida(null); }} placeholder="Ex: gastei 46 na padaria" style={{ ...estilos.input, flex: 1, minWidth: 0 }} aria-label="Lançamento rápido" />
-                      <button type="button" onClick={ouvirVoz} title={ouvindo ? 'Parar de ouvir' : 'Falar'} aria-label={ouvindo ? 'Parar de ouvir' : 'Falar o lançamento'} style={{ flexShrink: 0, width: '46px', borderRadius: '12px', border: ouvindo ? 'none' : '1px solid var(--border-strong)', backgroundColor: ouvindo ? 'var(--danger-text)' : 'var(--bg)', color: ouvindo ? '#ffffff' : 'var(--text)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <form onSubmit={e => { e.preventDefault(); clearTimeout(timerRapido.current); setOuvindo(false); interpretarRapido(textoRapido); }} style={{ display: 'flex', gap: '8px' }}>
+                      <input id="texto-rapido" type="text" enterKeyHint="done" autoComplete="off" value={textoRapido} onChange={e => mudarTextoRapido(e.target.value)} placeholder="Ex: gastei 46 na padaria" style={{ ...estilos.input, flex: 1, minWidth: 0 }} aria-label="Lançamento rápido" />
+                      <button type="button" onClick={ouvirVoz} title="Falar" aria-label="Falar o lançamento" style={{ flexShrink: 0, width: '46px', borderRadius: '12px', border: ouvindo ? 'none' : '1px solid var(--border-strong)', backgroundColor: ouvindo ? 'var(--accent)' : 'var(--bg)', color: ouvindo ? 'var(--on-accent)' : 'var(--text)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <Mic size={18} />
                       </button>
                       <button type="submit" style={{ ...estilos.buttonPrimary, flexShrink: 0, padding: '10px 14px' }}>Entender</button>
                     </form>
-                    {ouvindo && <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: 'var(--danger-text)', fontWeight: '600' }}>🔴 Ouvindo… fale agora (ex.: "gastei 30 no mercado"). Toque no 🎤 de novo para parar.</p>}
+                    {ouvindo && !previaRapida && <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: 'var(--accent-text)', fontWeight: '600', backgroundColor: 'rgba(var(--accent-rgb), 0.1)', borderRadius: '8px', padding: '8px 10px' }}>🎤 Toque no microfone do teclado e fale, ex.: "gastei 30 no mercado". Quando parar de falar, o app entende sozinho.</p>}
                     {avisoVoz && !ouvindo && <p role="status" style={{ margin: '8px 0 0 0', fontSize: '12px', color: 'var(--c-amber)', fontWeight: '600', backgroundColor: 'rgba(245, 158, 11, 0.1)', borderRadius: '8px', padding: '8px 10px' }}>{avisoVoz}</p>}
                     {previaRapida && (
                       <div style={{ marginTop: '12px', backgroundColor: 'var(--bg)', border: '1px dashed var(--accent)', borderRadius: '12px', padding: '12px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
