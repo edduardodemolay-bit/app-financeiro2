@@ -149,6 +149,115 @@
     const ChevronRight = createIcon('chevron-right');
     const Pencil = createIcon('pencil');
     const Repeat = createIcon('repeat');
+    const History = createIcon('history');
+    const Mic = createIcon('mic');
+    const Zap = createIcon('zap');
+    const CloudIcon = createIcon('cloud');
+    const LogOut = createIcon('log-out');
+
+    // ===== CONTA GOOGLE + CÓPIA NA NUVEM (Firebase / Google Cloud) =====
+    // Desligado enquanto estiver null. Para ligar, crie o projeto no Firebase e cole aqui a
+    // configuração do app da Web (passo a passo em COMO-ATIVAR-LOGIN.txt).
+    const FIREBASE_CONFIG = null;
+    const FIREBASE_VERSAO = '10.12.2';
+    let firebasePromessa = null;
+    function carregarFirebase() {
+      if (firebasePromessa) return firebasePromessa;
+      const script = (nome) => new Promise((ok, erro) => {
+        const s = document.createElement('script');
+        s.src = 'https://www.gstatic.com/firebasejs/' + FIREBASE_VERSAO + '/' + nome + '.js';
+        s.onload = ok; s.onerror = () => erro(new Error('Não carregou ' + nome));
+        document.head.appendChild(s);
+      });
+      firebasePromessa = script('firebase-app-compat')
+        .then(() => Promise.all([script('firebase-auth-compat'), script('firebase-firestore-compat')]))
+        .then(() => {
+          if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
+          return window.firebase;
+        });
+      return firebasePromessa;
+    }
+
+    // Leitura e gravação direta no aparelho (sem depender do estado da tela)
+    const CHAVES_LOCAIS = { transacoes: '@finapp_transacoes', limitesCategorias: '@finapp_limitesCategorias', metas: '@finapp_metas', recorrentes: '@finapp_recorrentes', categoriasExtras: '@finapp_categorias', historico: '@finapp_historico' };
+    function lerLocal() {
+      const d = {};
+      Object.entries(CHAVES_LOCAIS).forEach(([campo, chave]) => {
+        try { const v = localStorage.getItem(chave); if (v) d[campo] = JSON.parse(v); } catch (e) {}
+      });
+      return d;
+    }
+    function gravarLocal(d) {
+      Object.entries(CHAVES_LOCAIS).forEach(([campo, chave]) => {
+        if (d[campo] !== undefined) localStorage.setItem(chave, JSON.stringify(d[campo]));
+      });
+    }
+
+    // ===== LANÇAMENTO RÁPIDO: entende frases como "gastei 46 na padaria" ou "recebi 3500 de salário" =====
+    const semAcento = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const PALAVRAS_CATEGORIA = [
+      ['Salário', ['salario', 'holerite', 'pagamento do mes', 'decimo terceiro', 'ferias']],
+      ['Vendas', ['venda', 'vendi', 'vendas', 'cliente pagou', 'encomenda']],
+      ['Moradia', ['aluguel', 'luz', 'energia', 'agua', 'condominio', 'internet', 'gas', 'iptu', 'conta de casa', 'reforma']],
+      ['Alimentação', ['mercado', 'supermercado', 'padaria', 'lanche', 'almoco', 'jantar', 'restaurante', 'ifood', 'comida', 'pizza', 'acougue', 'feira', 'cafe', 'hamburguer', 'lanchonete', 'marmita', 'sorvete']],
+      ['Transporte', ['uber', '99', 'onibus', 'gasolina', 'combustivel', 'metro', 'taxi', 'estacionamento', 'pedagio', 'passagem', 'posto', 'mecanico', 'oficina']],
+      ['Saúde', ['farmacia', 'remedio', 'medico', 'consulta', 'dentista', 'exame', 'academia', 'plano de saude', 'hospital']],
+      ['Educação', ['escola', 'curso', 'faculdade', 'livro', 'mensalidade', 'material escolar', 'apostila']],
+      ['Lazer', ['cinema', 'show', 'bar', 'festa', 'viagem', 'netflix', 'spotify', 'jogo', 'passeio', 'cerveja', 'streaming']]
+    ];
+    const PALAVRAS_RECEITA = ['recebi', 'ganhei', 'entrou', 'caiu', 'vendi', 'venda', 'salario', 'pix recebido', 'me pagou', 'pagaram', 'renda', 'lucro'];
+    const PALAVRAS_DESPESA = ['conta de', 'aluguel', 'luz', 'agua', 'internet', 'condominio', 'mensalidade', 'boleto', 'fatura', 'iptu', 'parcela', 'plano de'];
+    const contemPalavra = (texto, palavra) => new RegExp('(^|[^a-z0-9])' + palavra.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-z0-9])').test(texto);
+
+    function interpretarTexto(texto, catEntrada, catSaida, hoje) {
+      const original = String(texto || '').trim();
+      const t = semAcento(original);
+      if (!t) return null;
+      // Valor: "R$ 46,50", "46 reais", "1.200", "2 mil"
+      let valor = NaN, trechoValor = '';
+      const mMil = t.match(/(\d+(?:[.,]\d+)?)\s*mil\b/);
+      const mDinheiro = t.match(/r\$\s*(\d[\d.]*(?:,\d{1,2})?)|(\d[\d.]*(?:,\d{1,2})?)\s*(?:reais|real|conto|contos|pila)\b/);
+      const mNumero = t.replace(/\bdia\s+\d{1,2}\b/, ' ').match(/\d[\d.]*(?:,\d{1,2})?/);
+      if (mMil) { valor = Number(mMil[1].replace(',', '.')) * 1000; trechoValor = mMil[0]; }
+      else if (mDinheiro) { valor = lerValor(mDinheiro[1] || mDinheiro[2]); trechoValor = mDinheiro[0]; }
+      else if (mNumero) { valor = lerValor(mNumero[0]); trechoValor = mNumero[0]; }
+      if (isNaN(valor) || valor <= 0) return null;
+      const resto = t.replace(trechoValor, ' ');
+
+      // Tipo
+      let type = 'gasto';
+      if (PALAVRAS_RECEITA.some(p => contemPalavra(resto, p))) type = 'receita';
+      else if (PALAVRAS_DESPESA.some(p => contemPalavra(resto, p))) type = 'despesa';
+
+      // Data
+      const base = new Date(hoje + 'T12:00:00');
+      if (contemPalavra(resto, 'anteontem')) base.setDate(base.getDate() - 2);
+      else if (contemPalavra(resto, 'ontem')) base.setDate(base.getDate() - 1);
+      else {
+        const mDia = resto.match(/\bdia\s+(\d{1,2})\b/);
+        if (mDia && Number(mDia[1]) >= 1 && Number(mDia[1]) <= 31) base.setDate(Math.min(Number(mDia[1]), new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate()));
+      }
+      const date = base.getFullYear() + '-' + String(base.getMonth() + 1).padStart(2, '0') + '-' + String(base.getDate()).padStart(2, '0');
+
+      // Categoria: primeiro as criadas pela pessoa (pelo nome), depois as palavras conhecidas
+      const lista = type === 'receita' ? catEntrada : catSaida;
+      let category = lista.find(c => c !== 'Outros' && contemPalavra(resto, semAcento(c)));
+      if (!category) {
+        const achada = PALAVRAS_CATEGORIA.find(([cat, palavras]) => lista.includes(cat) && palavras.some(p => contemPalavra(resto, p)));
+        category = achada ? achada[0] : 'Outros';
+      }
+
+      // Descrição: a frase sem o valor e sem as palavras de comando
+      const tirar = ['gastei', 'paguei', 'comprei', 'recebi', 'ganhei', 'vendi', 'entrou', 'caiu', 'hoje', 'ontem', 'anteontem', 'reais', 'real', 'r\\$', 'por', 'com', 'no', 'na', 'nos', 'nas', 'em', 'de', 'do', 'da', 'dos', 'das', 'um', 'uma', 'pra', 'para', 'o', 'a'];
+      let desc = original.replace(new RegExp(trechoValor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), ' ');
+      desc = desc.replace(/\bdia\s+\d{1,2}\b/i, ' ');
+      tirar.forEach(p => { desc = desc.replace(new RegExp('(^|\\s)' + p + '(?=\\s|$)', 'gi'), ' '); });
+      desc = desc.replace(/\s+/g, ' ').trim();
+      if (!desc) desc = category === 'Outros' ? (type === 'receita' ? 'Receita' : 'Gasto') : category;
+      desc = desc.charAt(0).toUpperCase() + desc.slice(1);
+
+      return { description: desc.slice(0, 60), amount: Math.round(valor * 100) / 100, type, category, date };
+    }
 
     const CATEGORIAS = ['Salário', 'Vendas', 'Alimentação', 'Transporte', 'Moradia', 'Lazer', 'Saúde', 'Educação', 'Outros'];
     // Categorias oferecidas no formulário conforme o tipo escolhido
@@ -379,6 +488,28 @@
       const categoriasDoTipo = (t) => (t === 'receita' ? catEntrada : catSaida);
       const ehCategoriaCriada = (grupo, cat) => (categoriasExtras[grupo] || []).includes(cat);
 
+      // Histórico de registros: quem fez o quê e quando (fica no menu)
+      const [historico, setHistorico] = useState([]);
+      const [nomeUsuario, setNomeUsuario] = useState(() => {
+        try { return localStorage.getItem('@finapp_nome') || ''; } catch (e) { return ''; }
+      });
+      // Conta Google (só aparece quando FIREBASE_CONFIG estiver preenchido)
+      const [usuarioNuvem, setUsuarioNuvem] = useState(null);
+      const [statusNuvem, setStatusNuvem] = useState(FIREBASE_CONFIG ? 'saiu' : 'desligado');
+      const nuvemRef = useRef(null);
+      const timerNuvem = useRef(null);
+      const nomeAutor = (usuarioNuvem && usuarioNuvem.nome) || nomeUsuario.trim() || 'Você';
+
+      // Lançamento rápido por texto ou voz
+      const [textoRapido, setTextoRapido] = useState('');
+      const [previaRapida, setPreviaRapida] = useState(null);
+      const [ouvindo, setOuvindo] = useState(false);
+      const reconhecedorRef = useRef(null);
+      const temVoz = typeof window !== 'undefined' && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+      // Parcelamento de compras
+      const [parcelas, setParcelas] = useState('1');
+
       useEffect(() => {
         async function carregarDadosIniciais() {
           if (window.electronAPI) {
@@ -404,6 +535,8 @@
             if (l) setLimitesCategorias(prev => ({ ...prev, ...JSON.parse(l) }));
             const ce = localStorage.getItem('@finapp_categorias');
             if (ce) { const c = JSON.parse(ce); setCategoriasExtras({ entrada: c.entrada || [], saida: c.saida || [] }); }
+            const h = localStorage.getItem('@finapp_historico');
+            if (h) setHistorico(JSON.parse(h));
             // Metas zeradas a pedido do usuário (uma única vez): remove as metas salvas neste aparelho.
             if (!localStorage.getItem('@finapp_metas_zeradas')) {
               localStorage.setItem('@finapp_metas', '[]');
@@ -450,15 +583,12 @@
           limitesCategorias: novosDados.limitesCategorias !== undefined ? novosDados.limitesCategorias : limitesCategorias,
           metas: novosDados.metas !== undefined ? novosDados.metas : metas,
           recorrentes: novosDados.recorrentes !== undefined ? novosDados.recorrentes : recorrentes,
-          categoriasExtras: novosDados.categoriasExtras !== undefined ? novosDados.categoriasExtras : categoriasExtras
+          categoriasExtras: novosDados.categoriasExtras !== undefined ? novosDados.categoriasExtras : categoriasExtras,
+          historico: novosDados.historico !== undefined ? novosDados.historico : historico
         };
 
         try {
-          localStorage.setItem('@finapp_transacoes', JSON.stringify(payload.transacoes));
-          localStorage.setItem('@finapp_limitesCategorias', JSON.stringify(payload.limitesCategorias));
-          localStorage.setItem('@finapp_metas', JSON.stringify(payload.metas));
-          localStorage.setItem('@finapp_recorrentes', JSON.stringify(payload.recorrentes));
-          localStorage.setItem('@finapp_categorias', JSON.stringify(payload.categoriasExtras));
+          gravarLocal(payload);
           setSalvoEm(new Date());
         } catch (e) {
           exibirNotificacao('❌ Não foi possível salvar neste aparelho. Exporte um backup.');
@@ -467,6 +597,105 @@
         if (window.electronAPI) {
           window.electronAPI.saveData(payload).catch((e) => console.error("Erro ao salvar no Electron:", e));
         }
+        enviarParaNuvem(payload);
+      };
+
+      // Guarda uma cópia na nuvem (Firestore), 1,5 s depois da última mudança
+      const enviarParaNuvem = (payload) => {
+        const sessao = nuvemRef.current;
+        if (!sessao) return;
+        clearTimeout(timerNuvem.current);
+        setStatusNuvem('salvando');
+        timerNuvem.current = setTimeout(() => {
+          sessao.doc.set({
+            nome: sessao.nome, email: sessao.email,
+            atualizadoEm: new Date().toISOString(),
+            dados: JSON.stringify(payload)
+          }, { merge: true })
+            .then(() => setStatusNuvem('sincronizado'))
+            .catch(() => setStatusNuvem('erro'));
+        }, 1500);
+      };
+
+      // Coloca no app os dados que vieram da nuvem ou de um backup
+      const aplicarDados = (d) => {
+        const lista = Array.isArray(d.transacoes) ? d.transacoes : [];
+        const novasMetas = Array.isArray(d.metas) ? d.metas.map(normalizarMeta) : [];
+        const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes : [];
+        const novasExtras = d.categoriasExtras ? { entrada: d.categoriasExtras.entrada || [], saida: d.categoriasExtras.saida || [] } : { entrada: [], saida: [] };
+        const novosLimites = { ...(d.limitesCategorias || {}) };
+        const novoHistorico = Array.isArray(d.historico) ? d.historico : [];
+        setTransacoes(lista); setMetas(novasMetas); setRecorrentes(novosRecorrentes);
+        setCategoriasExtras(novasExtras); setLimitesCategorias(prev => ({ ...prev, ...novosLimites })); setHistorico(novoHistorico);
+        return { transacoes: lista, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, limitesCategorias: novosLimites, historico: novoHistorico };
+      };
+
+      // Liga o login do Google quando o Firebase estiver configurado
+      useEffect(() => {
+        if (!FIREBASE_CONFIG) return;
+        let cancelado = false;
+        carregarFirebase().then(fb => {
+          if (cancelado) return;
+          fb.auth().getRedirectResult().catch(() => {});
+          fb.auth().onAuthStateChanged(async (user) => {
+            if (!user) { nuvemRef.current = null; setUsuarioNuvem(null); setStatusNuvem('saiu'); return; }
+            const perfil = { uid: user.uid, nome: user.displayName || user.email, email: user.email, foto: user.photoURL };
+            setUsuarioNuvem(perfil);
+            setStatusNuvem('conectando');
+            const doc = fb.firestore().collection('usuarios').doc(user.uid);
+            try {
+              const snap = await doc.get();
+              const daNuvem = snap.exists && snap.data().dados ? JSON.parse(snap.data().dados) : null;
+              // Lê direto do aparelho: aqui o estado da tela ainda pode ser o do início
+              const local = lerLocal();
+              const qtdLocal = (local.transacoes || []).length;
+              nuvemRef.current = { doc, nome: perfil.nome, email: perfil.email };
+              if (daNuvem && (daNuvem.transacoes || []).length > 0) {
+                const usarNuvem = qtdLocal === 0 || window.confirm('Sua conta já tem dados salvos na nuvem (' + daNuvem.transacoes.length + ' lançamentos). Usar os dados da nuvem neste aparelho?\n\nOK = usar os da nuvem\nCancelar = enviar os deste aparelho para a nuvem');
+                if (usarNuvem) {
+                  gravarLocal(aplicarDados(daNuvem));
+                  setStatusNuvem('sincronizado');
+                  exibirNotificacao('Dados da nuvem carregados');
+                  return;
+                }
+              }
+              enviarParaNuvem(local);
+            } catch (e) {
+              setStatusNuvem('erro');
+            }
+          });
+        }).catch(() => setStatusNuvem('erro'));
+        return () => { cancelado = true; };
+      }, []);
+
+      const entrarComGoogle = async () => {
+        try {
+          const fb = await carregarFirebase();
+          const provedor = new fb.auth.GoogleAuthProvider();
+          const instalado = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+          if (instalado) { await fb.auth().signInWithRedirect(provedor); return; }
+          try { await fb.auth().signInWithPopup(provedor); }
+          catch (e) { if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) await fb.auth().signInWithRedirect(provedor); else throw e; }
+        } catch (e) {
+          exibirNotificacao('Não foi possível entrar com o Google. Tente de novo.');
+        }
+      };
+
+      const sairDaConta = async () => {
+        if (!window.confirm('Sair da conta Google? Os dados continuam neste aparelho.')) return;
+        try { const fb = await carregarFirebase(); await fb.auth().signOut(); } catch (e) {}
+      };
+
+      // Anota uma ação no histórico e devolve a lista nova (para salvar junto)
+      const anotar = (acao, detalhe) => {
+        const novo = [{ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), quando: new Date().toISOString(), quem: nomeAutor, acao, detalhe }, ...historico].slice(0, 500);
+        setHistorico(novo);
+        return novo;
+      };
+
+      const salvarNome = (nome) => {
+        setNomeUsuario(nome);
+        try { localStorage.setItem('@finapp_nome', nome); } catch (e) {}
       };
 
       const formatarMoeda = (val) => Number(val || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -531,6 +760,19 @@
       const percentualMetas = totalObjetivoMetas > 0 ? Math.min(100, (totalGuardadoMetas / totalObjetivoMetas) * 100) : 0;
       const temExemplos = transacoes.some(t => t.exemplo) || metas.some(m => m.exemplo);
 
+      // Gráfico de gastos por categoria e comparação com o mês anterior
+      const fatiasGastos = categoriasDeGastos.map(cat => ({ cat, valor: gastosPorCategoria[cat] || 0, cor: corDaCategoria(cat).color })).filter(f => f.valor > 0).sort((a, b) => b.valor - a.valor);
+      const mesAnteriorSel = somarMeses(mesSelecionado, -1);
+      const saidasMesAnterior = somar(transacoes.filter(t => mesDe(t.date) === mesAnteriorSel && !ehFuturo(t) && (t.type === 'despesa' || t.type === 'gasto') && t.category !== 'Metas'));
+      const variacaoGastos = saidasMesAnterior > 0 ? ((totalGastoGeral - saidasMesAnterior) / saidasMesAnterior) * 100 : null;
+      let acumuladoFatias = 0;
+      const gradienteGastos = totalGastoGeral > 0
+        ? 'conic-gradient(' + fatiasGastos.map(f => { const ini = acumuladoFatias; acumuladoFatias += (f.valor / totalGastoGeral) * 360; return f.cor + ' ' + ini + 'deg ' + acumuladoFatias + 'deg'; }).join(', ') + ')'
+        : 'var(--border)';
+      // Contas a vencer nos próximos 7 dias (lançamentos agendados de saída)
+      const daquiA7 = (() => { const d = new Date(hoje + 'T12:00:00'); d.setDate(d.getDate() + 7); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
+      const proximosVencimentos = transacoes.filter(t => t.type !== 'receita' && t.date > hoje && t.date <= daquiA7).sort((a, b) => a.date.localeCompare(b.date));
+
       const ordenarPorData = (lista) => lista.sort((a, b) => new Date(b.date) - new Date(a.date));
 
       // Dinheiro na conta hoje (tudo que já aconteceu, de todos os meses)
@@ -566,9 +808,30 @@
         let novasMetas = metas;
         let afetadas = [];
 
+        const qtdParcelas = Math.floor(Number(parcelas) || 1);
+        if (editandoId === null && tipo !== 'receita' && !repetirMensal && (qtdParcelas < 1 || qtdParcelas > 48)) { setErroTransacao('Parcele em 1 a 48 vezes.'); return; }
+        if (editandoId !== null) {
+          dados.editadoPor = nomeAutor;
+        } else {
+          dados.autor = nomeAutor;
+        }
+
         if (editandoId !== null) {
           novasTransacoes = ordenarPorData(transacoes.map(t => (t.id === editandoId ? { ...t, ...dados } : t)));
           afetadas = novasTransacoes.filter(t => t.id === editandoId);
+        } else if (!repetirMensal && tipo !== 'receita' && qtdParcelas > 1) {
+          // Compra parcelada: uma parcela por mês; a última ajusta os centavos
+          const grupo = Date.now();
+          const centavos = Math.round(dados.amount * 100);
+          const parcela = Math.floor(centavos / qtdParcelas);
+          const [a, m, d] = dataTransacao.split('-').map(Number);
+          afetadas = Array.from({ length: qtdParcelas }, (_, i) => {
+            const mes = somarMeses(a + '-' + String(m).padStart(2, '0'), i);
+            const dia = String(Math.min(d, ultimoDia(mes))).padStart(2, '0');
+            const valorParcela = (i === qtdParcelas - 1 ? centavos - parcela * (qtdParcelas - 1) : parcela) / 100;
+            return { ...dados, id: grupo + i, amount: valorParcela, date: mes + '-' + dia, description: dados.description + ' (' + (i + 1) + '/' + qtdParcelas + ')', parcelaGrupo: grupo };
+          });
+          novasTransacoes = ordenarPorData([...afetadas, ...transacoes]);
         } else if (repetirMensal) {
           // Conta fixa: lança este mês agora e os próximos automaticamente
           const rec = { id: Date.now(), ...dados, dia: Number(dataTransacao.slice(8, 10)), inicio: mesDe(dataTransacao), gerados: [mesDe(dataTransacao)], ativo: true };
@@ -590,12 +853,69 @@
         const negativa = metaFicaNegativa(novasMetas);
         if (negativa) { setErroTransacao(avisoMetaNegativa(negativa)); return; }
 
+        const parcelado = editandoId === null && !repetirMensal && tipo !== 'receita' && qtdParcelas > 1;
+        const hist = anotar(
+          editandoId !== null ? 'Editou lançamento' : parcelado ? 'Lançou compra parcelada' : repetirMensal ? 'Criou conta fixa' : 'Lançou ' + (tipo === 'receita' ? 'receita' : tipo === 'despesa' ? 'despesa' : 'gasto'),
+          dados.description + ' · ' + formatarMoeda(dados.amount) + (parcelado ? ' em ' + qtdParcelas + 'x' : '') + ' · ' + dados.category
+        );
+
         setTransacoes(novasTransacoes);
         setMetas(novasMetas);
         fecharModalTransacao();
-        salvarTudoNoDisco({ transacoes: novasTransacoes, recorrentes: novosRecorrentes, metas: novasMetas });
+        salvarTudoNoDisco({ transacoes: novasTransacoes, recorrentes: novosRecorrentes, metas: novasMetas, historico: hist });
         const metaMsg = dados.metaMov === 'entrada' ? ' e somada à meta' : '';
-        exibirNotificacao((editandoId !== null ? 'Lançamento atualizado' : repetirMensal ? 'Conta fixa criada: repete todo mês' : 'Lançamento guardado') + metaMsg);
+        exibirNotificacao((editandoId !== null ? 'Lançamento atualizado' : parcelado ? 'Compra lançada em ' + qtdParcelas + ' parcelas' : repetirMensal ? 'Conta fixa criada: repete todo mês' : 'Lançamento guardado') + metaMsg);
+      }
+
+      // Salva direto o que o lançamento rápido entendeu
+      function salvarLancamentoRapido() {
+        if (!previaRapida) return;
+        const nova = { id: Date.now(), ...previaRapida, autor: nomeAutor, viaRapido: true };
+        const novasTransacoes = ordenarPorData([nova, ...transacoes]);
+        const hist = anotar('Lançou pelo lançamento rápido', nova.description + ' · ' + formatarMoeda(nova.amount) + ' · ' + nova.category);
+        setTransacoes(novasTransacoes);
+        setPreviaRapida(null);
+        setTextoRapido('');
+        salvarTudoNoDisco({ transacoes: novasTransacoes, historico: hist });
+        exibirNotificacao('Guardado: ' + formatarMoeda(nova.amount) + ' em ' + nova.category);
+      }
+
+      function interpretarRapido(texto) {
+        const r = interpretarTexto(texto, catEntrada, catSaida, hojeISO());
+        setPreviaRapida(r);
+        if (!r) exibirNotificacao('Não achei o valor. Tente algo como "gastei 46 na padaria"');
+      }
+
+      // Abre o formulário completo já preenchido com o que foi entendido
+      function corrigirRapido() {
+        if (!previaRapida) return;
+        abrirModalComData(previaRapida.date);
+        setDescricao(previaRapida.description);
+        setValor(valorParaCampo(previaRapida.amount));
+        setTipo(previaRapida.type);
+        setCategoria(previaRapida.category);
+        setPreviaRapida(null);
+        setTextoRapido('');
+      }
+
+      function ouvirVoz() {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) return;
+        if (ouvindo && reconhecedorRef.current) { reconhecedorRef.current.stop(); return; }
+        const rec = new SR();
+        rec.lang = 'pt-BR';
+        rec.interimResults = false;
+        rec.maxAlternatives = 1;
+        rec.onresult = (ev) => {
+          const falado = ev.results[0][0].transcript;
+          setTextoRapido(falado);
+          interpretarRapido(falado);
+        };
+        rec.onerror = () => exibirNotificacao('Não consegui ouvir. Verifique a permissão do microfone.');
+        rec.onend = () => setOuvindo(false);
+        reconhecedorRef.current = rec;
+        setOuvindo(true);
+        rec.start();
       }
 
       function fecharModalTransacao() {
@@ -603,6 +923,7 @@
         setEditandoId(null);
         setRepetirMensal(false);
         setDestinoReceita('conta');
+        setParcelas('1');
         setDescricao(''); setValor(''); setErroTransacao('');
       }
 
@@ -640,9 +961,10 @@
         const aviso = alvo && alvo.metaId ? 'Deseja excluir este lançamento? O valor também sai da meta.' : 'Deseja excluir este lançamento?';
         if (confirm(aviso)) {
           const novasTransacoes = transacoes.filter(t => t.id !== id);
+          const hist = alvo ? anotar('Excluiu lançamento', alvo.description + ' · ' + formatarMoeda(alvo.amount) + ' · ' + alvo.category) : historico;
           setTransacoes(novasTransacoes);
           setMetas(novasMetas);
-          salvarTudoNoDisco({ transacoes: novasTransacoes, metas: novasMetas });
+          salvarTudoNoDisco({ transacoes: novasTransacoes, metas: novasMetas, historico: hist });
         }
       }
 
@@ -670,9 +992,10 @@
         const negativa = metaFicaNegativa(novasMetas);
         if (negativa) { setErroMeta('O valor inicial não pode ser tão baixo: já foram retirados ' + formatarMoeda(guardado - guardadoDaMeta(negativa)) + ' desta meta.'); return; }
 
+        const hist = anotar(editandoMetaId !== null ? 'Editou meta' : 'Criou meta', nomeMeta.trim() + ' · objetivo ' + formatarMoeda(objetivo));
         setMetas(novasMetas);
         fecharModalMeta();
-        salvarTudoNoDisco({ metas: novasMetas });
+        salvarTudoNoDisco({ metas: novasMetas, historico: hist });
       }
 
       function fecharModalMeta() {
@@ -727,8 +1050,9 @@
         setMetas(novasMetas);
         setTransacoes(novasTransacoes);
         setValoresAporte(prev => ({ ...prev, [id]: '' }));
+        const hist = anotar(operacao === 'somar' ? 'Guardou na meta' : 'Retirou da meta', nomeDaMeta + ' · ' + formatarMoeda(quantia));
 
-        salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes });
+        salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes, historico: hist });
       }
 
       function excluirMeta(id) {
@@ -748,7 +1072,8 @@
           setMetas(novasMetas);
           setTransacoes(novasTransacoes);
           setRecorrentes(novosRecorrentes);
-          salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes, recorrentes: novosRecorrentes });
+          const hist = anotar('Excluiu meta', meta.nome + (devolver > 0 ? ' · ' + formatarMoeda(devolver) + ' voltaram para a conta' : ''));
+          salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes, recorrentes: novosRecorrentes, historico: hist });
         }
       }
 
@@ -759,9 +1084,10 @@
         if (negativa) { exibirNotificacao(avisoMetaNegativa(negativa)); return; }
         if (!confirm('Excluir esta movimentação de ' + formatarMoeda(Math.abs(mov.valor)) + ' da meta "' + meta.nome + '"? O lançamento ligado a ela também sai do extrato.')) return;
         const novasTransacoes = mov.transacaoId ? transacoes.filter(t => t.id !== mov.transacaoId) : transacoes;
+        const hist = anotar('Excluiu movimentação da meta', meta.nome + ' · ' + formatarMoeda(Math.abs(mov.valor)));
         setMetas(novasMetas);
         setTransacoes(novasTransacoes);
-        salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes });
+        salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes, historico: hist });
         exibirNotificacao('Movimentação excluída');
       }
 
@@ -873,7 +1199,8 @@
         setTransacoes(novos.transacoes);
         setRecorrentes(novos.recorrentes);
         fecharCategoria();
-        salvarTudoNoDisco({ limitesCategorias: novosLimites, categoriasExtras: novasExtras, transacoes: novos.transacoes, recorrentes: novos.recorrentes });
+        const hist = anotar(criandoCategoria ? 'Criou categoria' : nome !== categoriaEditando ? 'Renomeou categoria' : 'Ajustou planejamento', (nome !== categoriaEditando && !criandoCategoria ? categoriaEditando + ' → ' : '') + nome + ' · ' + formatarMoeda(val));
+        salvarTudoNoDisco({ limitesCategorias: novosLimites, categoriasExtras: novasExtras, transacoes: novos.transacoes, recorrentes: novos.recorrentes, historico: hist });
         exibirNotificacao(criandoCategoria ? 'Categoria "' + nome + '" criada' : 'Categoria atualizada');
       }
 
@@ -891,7 +1218,8 @@
         setTransacoes(novos.transacoes);
         setRecorrentes(novos.recorrentes);
         fecharCategoria();
-        salvarTudoNoDisco({ limitesCategorias: novosLimites, categoriasExtras: novasExtras, transacoes: novos.transacoes, recorrentes: novos.recorrentes });
+        const hist = anotar('Excluiu categoria', cat);
+        salvarTudoNoDisco({ limitesCategorias: novosLimites, categoriasExtras: novasExtras, transacoes: novos.transacoes, recorrentes: novos.recorrentes, historico: hist });
         exibirNotificacao('Categoria excluída');
       }
 
@@ -936,8 +1264,29 @@
 
       const transacoesDiaSelecionado = transacoes.filter(t => t.date === diaSelecionado);
 
+      // Planilha para abrir no Excel ou Google Planilhas (separada por ";" para o Excel em português)
+      const exportarPlanilha = () => {
+        const cel = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+        const linhas = [['Data', 'Descrição', 'Tipo', 'Categoria', 'Valor', 'Lançado por'].map(cel).join(';')];
+        [...transacoes].sort((a, b) => a.date.localeCompare(b.date)).forEach(t => {
+          const tipoTexto = t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto';
+          const valorTexto = (t.type === 'receita' ? '' : '-') + Number(t.amount).toFixed(2).replace('.', ',');
+          linhas.push([formatarDataBR(t.date), t.description, tipoTexto, t.category, valorTexto, t.autor || ''].map(cel).join(';'));
+        });
+        const blob = new Blob(['﻿' + linhas.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'lancamentos-' + hojeISO() + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        exibirNotificacao('📊 Planilha exportada!');
+      };
+
       const exportarDados = () => {
-        const dados = { versao: 3, exportadoEm: new Date().toISOString(), transacoes, limitesCategorias, metas, recorrentes, categoriasExtras };
+        const dados = { versao: 4, exportadoEm: new Date().toISOString(), transacoes, limitesCategorias, metas, recorrentes, categoriasExtras, historico };
         const blob = new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -968,7 +1317,8 @@
             setRecorrentes(novosRecorrentes);
             const novasExtras = d.categoriasExtras ? { entrada: d.categoriasExtras.entrada || [], saida: d.categoriasExtras.saida || [] } : categoriasExtras;
             setCategoriasExtras(novasExtras);
-            salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras });
+            const hist = anotar('Importou backup', d.transacoes.length + ' lançamentos');
+            salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, historico: hist });
             exibirNotificacao('📥 Dados importados com sucesso!');
           } catch (err) {
             exibirNotificacao('❌ Arquivo de backup inválido.');
@@ -1026,6 +1376,7 @@
           <React.Fragment>
             {meta && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(168, 85, 247, 0.15)', color: 'var(--c-purple)', fontWeight: '700' }}>→ Meta: {meta.nome}</span>}
             {t.exemplo && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--c-sky)', color: 'var(--c-sky)', fontWeight: '700', textTransform: 'uppercase' }}>Exemplo</span>}
+            {t.autor && <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>por {t.autor}</span>}
           </React.Fragment>
         );
       };
@@ -1083,7 +1434,8 @@
                   { id: 'orcamento', label: 'Planejamento', icon: PieChart },
                   { id: 'extrato', label: 'Extrato', icon: Receipt },
                   { id: 'metas', label: 'Metas', icon: Target },
-                  { id: 'calendario', label: 'Calendário', icon: CalendarIcon }
+                  { id: 'calendario', label: 'Calendário', icon: CalendarIcon },
+                  { id: 'historico', label: 'Histórico', icon: History }
                 ].map(item => {
                   const Icon = item.icon;
                   const ativo = abaAtiva === item.id;
@@ -1103,7 +1455,35 @@
                 })}
               </nav>
 
-              <div style={{ marginTop: '28px' }}>
+              <div style={{ marginTop: '24px', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px' }}>
+                {usuarioNuvem ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {usuarioNuvem.foto
+                      ? <img src={usuarioNuvem.foto} alt="" width="34" height="34" referrerPolicy="no-referrer" style={{ borderRadius: '50%', flexShrink: 0 }} />
+                      : <div style={{ width: '34px', height: '34px', borderRadius: '50%', backgroundColor: 'var(--accent)', color: 'var(--on-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', flexShrink: 0 }}>{(usuarioNuvem.nome || '?').charAt(0).toUpperCase()}</div>}
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <strong style={{ display: 'block', fontSize: '13px', color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{usuarioNuvem.nome}</strong>
+                      <span style={{ fontSize: '11px', color: statusNuvem === 'erro' ? 'var(--danger-text)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <CloudIcon size={12} /> {statusNuvem === 'sincronizado' ? 'Cópia na nuvem em dia' : statusNuvem === 'salvando' || statusNuvem === 'conectando' ? 'Sincronizando…' : 'Falha ao sincronizar'}
+                      </span>
+                    </div>
+                    <button onClick={sairDaConta} title="Sair da conta" aria-label="Sair da conta" style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '4px' }}><LogOut size={16} /></button>
+                  </div>
+                ) : (
+                  <React.Fragment>
+                    <label htmlFor="nome-usuario" style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>Quem está usando</label>
+                    <input id="nome-usuario" type="text" value={nomeUsuario} onChange={e => salvarNome(e.target.value)} placeholder="Seu nome" maxLength={40} style={{ ...estilos.input, marginTop: '6px', padding: '8px 12px', fontSize: '13px' }} />
+                    <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: 'var(--text-faint)' }}>Aparece no histórico ao lado de cada registro.</p>
+                    {FIREBASE_CONFIG && (
+                      <button onClick={entrarComGoogle} style={{ marginTop: '10px', width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: '700', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                        <span style={{ fontWeight: '900', color: '#4285F4' }}>G</span> Entrar ou criar conta com Google
+                      </button>
+                    )}
+                  </React.Fragment>
+                )}
+              </div>
+
+              <div style={{ marginTop: '22px' }}>
                 <button
                   onClick={() => setModoTema(modoTema === 'claro' ? 'escuro' : 'claro')}
                   style={{ width: '100%', marginBottom: '18px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}
@@ -1131,6 +1511,9 @@
                     📥 Importar backup
                     <input type="file" accept="application/json,.json" onChange={importarDados} style={{ display: 'none' }} />
                   </label>
+                  <button onClick={exportarPlanilha} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>
+                    📊 Exportar planilha (Excel)
+                  </button>
                   <button onClick={() => { (temExemplos ? removerExemplos : carregarExemplos)(); setMenuAberto(false); }} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px dashed var(--c-sky)', backgroundColor: 'var(--bg)', color: 'var(--c-sky)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>
                     {temExemplos ? '🧹 Remover dados de exemplo' : '✨ Carregar dados de exemplo'}
                   </button>
@@ -1161,6 +1544,7 @@
                 {abaAtiva === 'extrato' && 'Extrato de Lançamentos'}
                 {abaAtiva === 'metas' && 'Metas e Objetivos'}
                 {abaAtiva === 'calendario' && 'Calendário Anual Interativo'}
+                {abaAtiva === 'historico' && 'Histórico de Registros'}
               </h2>
               </div>
               <div style={{ display: 'flex', gap: isMobile ? '8px' : '12px', flexShrink: 0 }}>
@@ -1195,6 +1579,39 @@
                       <button onClick={removerExemplos} style={{ background: 'none', border: '1px solid var(--c-sky)', color: 'var(--c-sky)', borderRadius: '8px', padding: '6px 12px', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>Remover exemplos</button>
                     </div>
                   )}
+
+                  <div style={estilos.card}>
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}><Zap size={16} color="var(--accent)" /> Lançamento rápido</h3>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 12px 0' }}>Escreva ou fale do seu jeito: "gastei 46 na padaria", "recebi 3500 de salário", "paguei 120 de luz ontem".</p>
+                    <form onSubmit={e => { e.preventDefault(); interpretarRapido(textoRapido); }} style={{ display: 'flex', gap: '8px' }}>
+                      <input id="texto-rapido" type="text" value={textoRapido} onChange={e => { setTextoRapido(e.target.value); setPreviaRapida(null); }} placeholder="Ex: gastei 46 na padaria" style={{ ...estilos.input, flex: 1, minWidth: 0 }} aria-label="Lançamento rápido" />
+                      {temVoz && (
+                        <button type="button" onClick={ouvirVoz} title={ouvindo ? 'Parar de ouvir' : 'Falar'} aria-label={ouvindo ? 'Parar de ouvir' : 'Falar o lançamento'} style={{ flexShrink: 0, width: '46px', borderRadius: '12px', border: ouvindo ? 'none' : '1px solid var(--border-strong)', backgroundColor: ouvindo ? 'var(--danger-text)' : 'var(--bg)', color: ouvindo ? '#ffffff' : 'var(--text)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <Mic size={18} />
+                        </button>
+                      )}
+                      <button type="submit" style={{ ...estilos.buttonPrimary, flexShrink: 0, padding: '10px 14px' }}>Entender</button>
+                    </form>
+                    {ouvindo && <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: 'var(--danger-text)', fontWeight: '600' }}>Ouvindo… fale o lançamento.</p>}
+                    {previaRapida && (
+                      <div style={{ marginTop: '12px', backgroundColor: 'var(--bg)', border: '1px dashed var(--accent)', borderRadius: '12px', padding: '12px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <strong style={{ fontSize: '15px', color: renderCorTipo(previaRapida.type) }}>{previaRapida.type === 'receita' ? '+' : '-'} {formatarMoeda(previaRapida.amount)}</strong>
+                          <span style={{ fontSize: '13px', color: 'var(--text)', marginLeft: '8px' }}>{previaRapida.description}</span>
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
+                            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: renderBgTipo(previaRapida.type), color: renderCorTipo(previaRapida.type), fontWeight: '700', textTransform: 'uppercase' }}>{previaRapida.type === 'receita' ? 'Receita' : previaRapida.type === 'despesa' ? 'Despesa' : 'Gasto'}</span>
+                            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: corDaCategoria(previaRapida.category).bg, color: corDaCategoria(previaRapida.category).color, fontWeight: '600' }}>{previaRapida.category}</span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(previaRapida.date)}</span>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button onClick={corrigirRapido} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text)', borderRadius: '10px', padding: '8px 12px', fontWeight: '600', fontSize: '12px', cursor: 'pointer' }}>Corrigir</button>
+                          <button onClick={salvarLancamentoRapido} style={{ ...estilos.buttonPrimary, padding: '8px 14px', fontSize: '12px' }}>Salvar</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   {seletorMes}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '20px' }}>
                     <div style={estilos.card}>
@@ -1240,6 +1657,58 @@
                       </div>
                     </div>
                   )}
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '20px' }}>
+                    <div style={estilos.card}>
+                      <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 4px 0' }}>Para onde foi o dinheiro</h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 16px 0' }}>
+                        {variacaoGastos === null ? 'Gastos e despesas do mês por categoria' : (
+                          <span>Você gastou <strong style={{ color: variacaoGastos > 0 ? 'var(--danger-text)' : 'var(--accent-text)' }}>{Math.abs(variacaoGastos).toFixed(0)}% {variacaoGastos > 0 ? 'a mais' : 'a menos'}</strong> que em {NOMES_MESES[Number(mesAnteriorSel.slice(5, 7)) - 1].toLowerCase()} ({formatarMoeda(saidasMesAnterior)})</span>
+                        )}
+                      </p>
+                      {fatiasGastos.length === 0 ? (
+                        <p style={{ color: 'var(--text-faint)', fontSize: '13px', margin: 0 }}>Nenhum gasto em {nomeDoMes(mesSelecionado)}.</p>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+                          <div role="img" aria-label="Gráfico de gastos por categoria" style={{ position: 'relative', width: '130px', height: '130px', flexShrink: 0 }}>
+                            <div style={{ width: '100%', height: '100%', borderRadius: '50%', background: gradienteGastos }} />
+                            <div style={{ position: 'absolute', inset: '22px', borderRadius: '50%', backgroundColor: 'var(--card)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                              <strong style={{ fontSize: '13px', color: 'var(--text-strong)' }}>{formatarMoeda(totalGastoGeral)}</strong>
+                              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>no mês</span>
+                            </div>
+                          </div>
+                          <div style={{ flex: '1 1 160px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {fatiasGastos.slice(0, 6).map(f => (
+                              <div key={f.cat} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+                                <span style={{ width: '10px', height: '10px', borderRadius: '3px', backgroundColor: f.cor, flexShrink: 0 }} />
+                                <span style={{ color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.cat}</span>
+                                <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{((f.valor / totalGastoGeral) * 100).toFixed(0)}%</span>
+                                <strong style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}>{formatarMoeda(f.valor)}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={estilos.card}>
+                      <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertTriangle size={16} color="var(--c-amber)" /> Vence nos próximos 7 dias</h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 14px 0' }}>Contas e gastos agendados para não esquecer.</p>
+                      {proximosVencimentos.length === 0 ? (
+                        <p style={{ color: 'var(--text-faint)', fontSize: '13px', margin: 0 }}>Nada vence nesta semana. Para lembrar de uma conta, lance com a data do vencimento.</p>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {proximosVencimentos.slice(0, 6).map(t => (
+                            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', fontSize: '13px', backgroundColor: 'var(--bg)', borderRadius: '10px', padding: '8px 12px' }}>
+                              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)' }}><strong>{formatarDataBR(t.date).slice(0, 5)}</strong> · {t.description}</span>
+                              <strong style={{ color: 'var(--danger-text)', whiteSpace: 'nowrap' }}>{formatarMoeda(t.amount)}</strong>
+                            </div>
+                          ))}
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'right' }}>Total: <strong>{formatarMoeda(somar(proximosVencimentos))}</strong></span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
                   <div style={estilos.card}>
                     <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 20px 0' }}>Últimos Lançamentos do Mês</h3>
@@ -1703,6 +2172,39 @@
                 </div>
               )}
 
+              {abaAtiva === 'historico' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  <div style={estilos.card}>
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 4px 0' }}>Quem registrou o quê</h3>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                      Cada lançamento, meta e categoria criada, editada ou excluída fica anotada aqui, com o nome de quem fez e a hora. Guardamos os últimos 500 registros.
+                      {!usuarioNuvem && !nomeUsuario.trim() && <span> Coloque seu nome no menu, em "Quem está usando", para ele aparecer nos próximos registros.</span>}
+                    </p>
+                  </div>
+                  {historico.length === 0 ? (
+                    <p style={{ color: 'var(--text-faint)', textAlign: 'center', padding: '32px 0' }}>Nenhum registro ainda. Faça um lançamento e ele aparece aqui.</p>
+                  ) : (
+                    Object.entries(historico.reduce((acc, h) => { const dia = h.quando.slice(0, 10); (acc[dia] = acc[dia] || []).push(h); return acc; }, {})).map(([dia, itens]) => (
+                      <div key={dia} style={estilos.card}>
+                        <h4 style={{ margin: '0 0 12px 0', fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{dia === hoje ? 'Hoje' : formatarDataBR(dia)}</h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {itens.map(h => (
+                            <div key={h.id} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', fontSize: '13px' }}>
+                              <span style={{ color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums', flexShrink: 0, width: '42px' }}>{new Date(h.quando).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                              <div style={{ minWidth: 0 }}>
+                                <span style={{ color: 'var(--text-strong)', fontWeight: '700' }}>{h.quem}</span>
+                                <span style={{ color: 'var(--text-muted)' }}> · {h.acao}</span>
+                                <div style={{ color: 'var(--text)', overflowWrap: 'anywhere' }}>{h.detalhe}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
               {abaAtiva === 'calendario' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
                   
@@ -1890,6 +2392,15 @@
                       <input type="checkbox" checked={repetirMensal} onChange={e => setRepetirMensal(e.target.checked)} style={{ width: '18px', height: '18px', marginTop: '1px', accentColor: 'var(--accent)' }} />
                       <span><strong>Repetir todo mês</strong><br /><span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Para contas fixas como aluguel, luz ou salário. O app lança sozinho no mesmo dia de cada mês.</span></span>
                     </label>
+                  )}
+                  {editandoId === null && tipo !== 'receita' && !repetirMensal && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                      <label htmlFor="parcelas" style={{ fontSize: '13px', color: 'var(--text)', fontWeight: '600' }}>Parcelar em</label>
+                      <input id="parcelas" type="number" inputMode="numeric" min="1" max="48" value={parcelas} onChange={e => setParcelas(e.target.value)} style={{ ...estilos.input, width: '80px' }} />
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {Number(parcelas) > 1 && !isNaN(lerValor(valor)) ? Number(parcelas) + 'x de ' + formatarMoeda(lerValor(valor) / Number(parcelas)) + ' (uma por mês)' : 'vezes (1 = à vista)'}
+                      </span>
+                    </div>
                   )}
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
                     <button type="button" onClick={fecharModalTransacao} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>

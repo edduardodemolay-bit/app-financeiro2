@@ -1,0 +1,42 @@
+COMO LIGAR O LOGIN COM GOOGLE E A CÓPIA NA NUVEM (uns 15 minutos, grátis)
+
+O app já está pronto. Falta só criar o "projeto" no Google, que precisa da sua conta.
+O plano gratuito (Spark) do Firebase aguenta milhares de pessoas usando.
+
+1) CRIAR O PROJETO
+   - Abra https://console.firebase.google.com e entre com sua conta Google.
+   - "Criar um projeto" > nome: eddfinanca > pode desligar o Google Analytics > Criar.
+
+2) LIGAR O LOGIN COM GOOGLE
+   - Menu "Criação" > Authentication > "Vamos começar".
+   - Aba "Método de login" > Google > Ativar > escolha seu e-mail de suporte > Salvar.
+   - Aba "Configurações" > "Domínios autorizados" > Adicionar domínio:
+       edduardodemolay-bit.github.io
+     (e o domínio próprio, se você comprar um, ex.: eddfinanca.com.br)
+
+3) CRIAR O BANCO (Firestore)
+   - Menu "Criação" > Firestore Database > Criar banco de dados.
+   - Local: southamerica-east1 (São Paulo) > "Iniciar no modo de produção" > Criar.
+   - Aba "Regras": apague tudo, cole o conteúdo do arquivo firestore.rules > Publicar.
+     (Essas regras fazem cada pessoa ver SÓ os próprios dados.)
+
+4) PEGAR A CONFIGURAÇÃO DO APP
+   - Engrenagem (Configurações do projeto) > "Seus apps" > ícone </> (Web).
+   - Apelido: EddFinança Web > Registrar app (não precisa do Hosting).
+   - Ele mostra um bloco "const firebaseConfig = { apiKey: ..., authDomain: ..., ... }".
+   - Copie esse bloco e mande para o Claude, ou cole no index.html no lugar de:
+       const FIREBASE_CONFIG = null;
+     ficando assim:
+       const FIREBASE_CONFIG = { apiKey: "...", authDomain: "...", projectId: "...", storageBucket: "...", messagingSenderId: "...", appId: "..." };
+   (Esses valores não são senha: o Google foi feito para eles ficarem no site.
+    Quem protege os dados são as regras do passo 3.)
+
+5) PRONTO
+   - Publique o index.html. No menu do app vai aparecer "Entrar ou criar conta com Google".
+   - Quem entra fica registrado em Firestore > usuarios (nome, e-mail e a cópia dos dados).
+   - Você vê a lista de cadastrados em Authentication > Users.
+
+ATENÇÃO (LGPD)
+   - Como o app passa a guardar dados financeiros de outras pessoas, coloque uma
+     página simples de "Política de Privacidade" dizendo o que é guardado e para quê,
+     e como a pessoa pede para apagar. Ela também é exigida para publicar nas lojas.
