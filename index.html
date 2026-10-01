@@ -94,6 +94,15 @@
   <div id="root"></div>
 
   <script>
+    // Aplica o tema antes do app carregar (evita piscar claro à noite)
+    (function () {
+      try {
+        var pref = localStorage.getItem('@finapp_modoTema') || 'auto';
+        var h = new Date().getHours();
+        var modo = pref === 'auto' ? ((h >= 18 || h < 6) ? 'escuro' : 'claro') : pref;
+        document.documentElement.setAttribute('data-tema', modo);
+      } catch (e) {}
+    })();
     if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
       window.addEventListener('load', function () {
         navigator.serviceWorker.register('./sw.js').catch(function () {});
@@ -453,6 +462,16 @@
       };
     }
 
+    // Confere cada lançamento: conserta campos faltando e separa os que não têm data ou valor válidos
+    function limparTransacoes(lista) {
+      const validas = [], descartadas = [];
+      (Array.isArray(lista) ? lista : []).forEach(t => {
+        if (!t || typeof t !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(t.date)) || !isFinite(Number(t.amount)) || t.amount === '' || t.amount == null) { descartadas.push(t); return; }
+        validas.push({ ...t, description: String(t.description == null ? '' : t.description), amount: Number(t.amount), category: String(t.category || 'Outros'), type: ['receita', 'despesa', 'gasto'].includes(t.type) ? t.type : 'gasto' });
+      });
+      return { validas, descartadas };
+    }
+
     const LIMITES_PADRAO = {
       'Salário': 0,
       'Vendas': 0,
@@ -489,9 +508,21 @@
       const [corTema, setCorTema] = useState(() => {
         try { return localStorage.getItem('@finapp_cor') || 'verde'; } catch (e) { return 'verde'; }
       });
-      const [modoTema, setModoTema] = useState(() => {
-        try { return localStorage.getItem('@finapp_modo') || 'claro'; } catch (e) { return 'claro'; }
+      // Tema: 'auto' (escuro das 18h às 6h), 'claro' ou 'escuro' (escolha fixa da pessoa).
+      // Chave nova para que todos comecem no automático, mesmo quem já tinha escolhido antes.
+      const [preferenciaTema, setPreferenciaTema] = useState(() => {
+        try { return localStorage.getItem('@finapp_modoTema') || 'auto'; } catch (e) { return 'auto'; }
       });
+      const ehNoite = () => { const h = new Date().getHours(); return h >= 18 || h < 6; };
+      const [noite, setNoite] = useState(ehNoite);
+      // Confere a hora a cada minuto e ao voltar para o app, para trocar sozinho às 18h e às 6h
+      useEffect(() => {
+        const conferir = () => setNoite(ehNoite());
+        const timer = setInterval(conferir, 60000);
+        document.addEventListener('visibilitychange', conferir);
+        return () => { clearInterval(timer); document.removeEventListener('visibilitychange', conferir); };
+      }, []);
+      const modoTema = preferenciaTema === 'auto' ? (noite ? 'escuro' : 'claro') : preferenciaTema;
       useEffect(() => {
         const t = TEMAS[corTema] || TEMAS.verde;
         const root = document.documentElement;
@@ -501,11 +532,14 @@
         root.style.setProperty('--accent-dark', t.dark);
         root.style.setProperty('--accent-rgb', t.rgb);
         root.style.setProperty('--accent-text', modoTema === 'escuro' ? t.light : t.dark);
+        // Barra do celular acompanha o tema
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', modoTema === 'escuro' ? '#0e1525' : t.hex);
         try {
           localStorage.setItem('@finapp_cor', corTema);
-          localStorage.setItem('@finapp_modo', modoTema);
+          localStorage.setItem('@finapp_modoTema', preferenciaTema);
         } catch (e) {}
-      }, [corTema, modoTema]);
+      }, [corTema, modoTema, preferenciaTema]);
       const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
       const [menuAberto, setMenuAberto] = useState(false);
       useEffect(() => {
@@ -608,26 +642,56 @@
           }
 
           try {
-            const t = localStorage.getItem('@finapp_transacoes');
-            const listaTransacoes = t ? JSON.parse(t) : [];
-            setTransacoes(listaTransacoes);
-            const l = localStorage.getItem('@finapp_limitesCategorias');
-            if (l) setLimitesCategorias(prev => ({ ...prev, ...JSON.parse(l) }));
-            const ce = localStorage.getItem('@finapp_categorias');
-            if (ce) setCategoriasExtras(normalizarExtras(JSON.parse(ce)));
-            const h = localStorage.getItem('@finapp_historico');
-            if (h) setHistorico(JSON.parse(h));
             // Metas zeradas a pedido do usuário (uma única vez): remove as metas salvas neste aparelho.
             if (!localStorage.getItem('@finapp_metas_zeradas')) {
               localStorage.setItem('@finapp_metas', '[]');
               localStorage.setItem('@finapp_metas_zeradas', '1');
             }
-            const m = localStorage.getItem('@finapp_metas');
-            const listaMetas = m ? JSON.parse(m).map(normalizarMeta) : [];
-            setMetas(listaMetas);
-            const r = localStorage.getItem('@finapp_recorrentes');
-            const listaRecorrentes = r ? JSON.parse(r) : [];
-            setRecorrentes(listaRecorrentes);
+          } catch (e) {}
+
+          // Lê cada item separado: se um estiver estragado, os outros abrem normalmente
+          // e o conteúdo estragado é guardado à parte (nada é apagado sem cópia).
+          const problemas = [];
+          const lerItem = (chave, padrao, validar) => {
+            let bruto = null;
+            try { bruto = localStorage.getItem(chave); } catch (e) { return padrao; }
+            if (bruto == null) return padrao;
+            try {
+              const valor = JSON.parse(bruto);
+              if (validar && !validar(valor)) throw new Error('formato');
+              return valor;
+            } catch (e) {
+              try { localStorage.setItem('@finapp_copia_estragada:' + chave + ':' + Date.now(), bruto); } catch (e2) {}
+              problemas.push(chave);
+              return padrao;
+            }
+          };
+          const ehLista = (v) => Array.isArray(v);
+          const ehObjeto = (v) => v && typeof v === 'object' && !Array.isArray(v);
+
+          // Lançamentos com algum campo faltando são consertados; os sem valor ou data válidos ficam de fora (com cópia)
+          const { validas: listaTransacoes, descartadas } = limparTransacoes(lerItem('@finapp_transacoes', [], ehLista));
+          if (descartadas.length) {
+            try { localStorage.setItem('@finapp_copia_estragada:lancamentos:' + Date.now(), JSON.stringify(descartadas)); } catch (e) {}
+            problemas.push(descartadas.length + ' lançamento(s) sem data ou valor');
+          }
+          setTransacoes(listaTransacoes);
+
+          const limites = lerItem('@finapp_limitesCategorias', null, ehObjeto);
+          if (limites) setLimitesCategorias(prev => ({ ...prev, ...limites }));
+          const extras = lerItem('@finapp_categorias', null, ehObjeto);
+          if (extras) setCategoriasExtras(normalizarExtras(extras));
+          setHistorico(lerItem('@finapp_historico', [], ehLista).filter(h => h && typeof h.quando === 'string'));
+          const listaMetas = lerItem('@finapp_metas', [], ehLista).filter(m => m && typeof m === 'object').map(normalizarMeta);
+          setMetas(listaMetas);
+          const listaRecorrentes = lerItem('@finapp_recorrentes', [], ehLista).filter(r => r && typeof r === 'object' && /^\d{4}-\d{2}$/.test(String(r.inicio)));
+          setRecorrentes(listaRecorrentes);
+
+          if (problemas.length) {
+            setTimeout(() => exibirNotificacao('⚠️ Alguns dados salvos estavam estragados e foram guardados à parte. O resto abriu normalmente.'), 500);
+          }
+
+          try {
 
             // Lança as contas fixas dos meses que passaram desde a última abertura
             const gerado = gerarLancamentosFixos(listaRecorrentes, listaTransacoes, mesDe(hojeISO()));
@@ -692,7 +756,7 @@
 
       // Coloca no app os dados que vieram da nuvem ou de um backup
       const aplicarDados = (d) => {
-        const lista = Array.isArray(d.transacoes) ? d.transacoes : [];
+        const lista = limparTransacoes(d.transacoes).validas;
         const novasMetas = Array.isArray(d.metas) ? d.metas.map(normalizarMeta) : [];
         const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes : [];
         const novasExtras = normalizarExtras(d.categoriasExtras);
@@ -746,11 +810,20 @@
               // Só grava se a nuvem ainda estiver na versão que acabamos de ler; se outro aparelho
               // enviou nesse meio-tempo, a gravação é recusada e o app compara de novo.
               const doc = sessao.doc;
+              // O documento da nuvem aceita até 1 MB. Se estiver perto disso, a cópia leva só o histórico recente.
+              let textoDados = JSON.stringify(local);
+              if (textoDados.length > 900000) textoDados = JSON.stringify({ ...local, historico: (local.historico || []).slice(0, 50) });
+              if (textoDados.length > 1000000) {
+                setStatusNuvem('cheio');
+                exibirNotificacao('⚠️ Seus dados ficaram grandes demais para a cópia na nuvem. Exporte um backup no menu.');
+                resultado = 'cheio';
+                break;
+              }
               const mudouNoMeio = await sessao.fb.firestore().runTransaction(async (tx) => {
                 const atual = await tx.get(doc);
                 const versaoAgora = atual.exists ? (atual.data().versao || null) : null;
                 if (versaoAgora !== versaoNuvem) return true;
-                tx.set(doc, { nome: sessao.nome, email: sessao.email, atualizadoEm: new Date().toISOString(), versao: versaoLocal, dados: JSON.stringify(local) }, { merge: true });
+                tx.set(doc, { nome: sessao.nome, email: sessao.email, atualizadoEm: new Date().toISOString(), versao: versaoLocal, dados: textoDados }, { merge: true });
                 return false;
               });
               if (mudouNoMeio) continue;
@@ -763,7 +836,7 @@
             resultado = 'em-dia';
             break;
           }
-          setStatusNuvem(resultado === 'erro' ? 'erro' : 'sincronizado');
+          setStatusNuvem(resultado === 'erro' ? 'erro' : resultado === 'cheio' ? 'cheio' : 'sincronizado');
         } catch (e) {
           console.error('Erro ao sincronizar:', e);
           setStatusNuvem('erro');
@@ -784,8 +857,12 @@
       // Ao voltar para o app (trocou de aba ou desbloqueou o celular), busca o que mudou na nuvem
       useEffect(() => {
         const aoVoltar = () => { if (document.visibilityState === 'visible' && nuvemRef.current && !timerNuvem.current) sincronizar(); };
+        // Também tenta quando a internet volta e, com o app aberto na tela, a cada 2 minutos
+        const aoReconectar = () => { if (nuvemRef.current && !timerNuvem.current) sincronizar(); };
+        const periodico = setInterval(() => { if (document.visibilityState === 'visible' && navigator.onLine !== false) aoReconectar(); }, 120000);
         document.addEventListener('visibilitychange', aoVoltar);
-        return () => document.removeEventListener('visibilitychange', aoVoltar);
+        window.addEventListener('online', aoReconectar);
+        return () => { document.removeEventListener('visibilitychange', aoVoltar); window.removeEventListener('online', aoReconectar); clearInterval(periodico); };
       }, []);
 
       // Liga o login quando o Firebase estiver configurado (com ele ligado, o app só abre depois de entrar)
@@ -887,6 +964,37 @@
         exibirNotificacao('Você saiu. Os dados deste aparelho foram apagados');
       };
 
+      // Excluir a conta e todos os dados (direito previsto na LGPD)
+      const excluirConta = async () => {
+        const sessao = nuvemRef.current;
+        if (!sessao) return;
+        if (!window.confirm('Excluir a sua conta e TODOS os seus dados?\n\nSeus lançamentos, metas, contas fixas e histórico serão apagados da nuvem e deste aparelho. Não dá para desfazer.\n\nDica: se quiser guardar uma cópia, cancele e use antes "Exportar backup".')) return;
+        if (!window.confirm('Última confirmação: apagar tudo agora?')) return;
+        const usuario = sessao.fb.auth().currentUser;
+        if (!usuario) return;
+        // O Google exige um login recente para excluir a conta
+        const ultimoLogin = Date.parse((usuario.metadata && usuario.metadata.lastSignInTime) || 0);
+        if (!ultimoLogin || Date.now() - ultimoLogin > 4 * 60 * 1000) {
+          window.alert('Por segurança, é preciso ter entrado na conta há poucos minutos.\n\nSaia da conta, entre de novo e, logo em seguida, toque em "Excluir minha conta e meus dados".');
+          return;
+        }
+        clearTimeout(timerNuvem.current); timerNuvem.current = null;
+        nuvemRef.current = null; // para de sincronizar antes de apagar
+        try {
+          await sessao.doc.delete();
+          await usuario.delete();
+        } catch (e) {
+          try { await sessao.fb.auth().signOut(); } catch (e2) {}
+          limparAparelho();
+          window.alert(e && e.code === 'auth/requires-recent-login'
+            ? 'Os dados foram apagados, mas o Google pediu um login recente para remover a conta. Entre de novo e toque em "Excluir minha conta" mais uma vez.'
+            : 'Não foi possível terminar a exclusão (sem internet?). Entre de novo e tente outra vez.');
+          return;
+        }
+        limparAparelho();
+        exibirNotificacao('Sua conta e todos os seus dados foram excluídos');
+      };
+
       // Anota uma ação no histórico e devolve a lista nova (para salvar junto)
       const anotar = (acao, detalhe) => {
         const novo = [{ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), quando: new Date().toISOString(), quem: nomeAutor, acao, detalhe }, ...historico].slice(0, 500);
@@ -975,6 +1083,17 @@
       const gradienteGastos = totalGastoGeral > 0
         ? 'conic-gradient(' + fatiasGastos.map(f => { const ini = acumuladoFatias; acumuladoFatias += (f.valor / totalGastoGeral) * 360; return f.cor + ' ' + ini + 'deg ' + acumuladoFatias + 'deg'; }).join(', ') + ')'
         : 'var(--border)';
+      // Evolução: quanto entrou e saiu da conta nos 6 meses até o mês escolhido (sem agendados)
+      const evolucao = Array.from({ length: 6 }, (_, i) => {
+        const mes = somarMeses(mesSelecionado, i - 5);
+        const doMes = transacoes.filter(t => mesDe(t.date) === mes && !ehFuturo(t));
+        const entrou = somar(doMes.filter(t => t.type === 'receita' && entraNaConta(t)));
+        const saiu = somar(doMes.filter(t => t.type !== 'receita'));
+        return { mes, entrou, saiu };
+      });
+      const maxEvolucao = Math.max(1, ...evolucao.map(e => Math.max(e.entrou, e.saiu)));
+      const temEvolucao = evolucao.some(e => e.entrou > 0 || e.saiu > 0);
+
       // Contas a vencer nos próximos 7 dias (lançamentos agendados de saída)
       const daquiA7 = (() => { const d = new Date(hoje + 'T12:00:00'); d.setDate(d.getDate() + 7); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
       const proximosVencimentos = transacoes.filter(t => t.type !== 'receita' && t.date > hoje && t.date <= daquiA7).sort((a, b) => a.date.localeCompare(b.date));
@@ -1564,16 +1683,20 @@
             if (!window.confirm('Isso vai substituir os dados atuais deste aparelho. Continuar?')) return;
             const limites = d.limitesCategorias ? { ...limitesCategorias, ...d.limitesCategorias } : limitesCategorias;
             const novasMetas = Array.isArray(d.metas) ? d.metas.map(normalizarMeta) : metas;
-            const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes : [];
-            setTransacoes(d.transacoes);
+            const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes.filter(r => r && /^\d{4}-\d{2}$/.test(String(r.inicio))) : [];
+            const { validas, descartadas } = limparTransacoes(d.transacoes);
+            setTransacoes(validas);
             setLimitesCategorias(limites);
             setMetas(novasMetas);
             setRecorrentes(novosRecorrentes);
             const novasExtras = d.categoriasExtras ? normalizarExtras(d.categoriasExtras) : categoriasExtras;
             setCategoriasExtras(novasExtras);
-            const hist = anotar('Importou backup', d.transacoes.length + ' lançamentos');
-            salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, historico: hist });
-            exibirNotificacao('📥 Dados importados com sucesso!');
+            // Traz também o histórico do backup, com o registro da importação no topo
+            const histBackup = Array.isArray(d.historico) ? d.historico.filter(h => h && typeof h.quando === 'string') : [];
+            const hist = [{ id: Date.now() + '-imp', quando: new Date().toISOString(), quem: nomeAutor, acao: 'Importou backup', detalhe: validas.length + ' lançamentos' }, ...histBackup].slice(0, 500);
+            setHistorico(hist);
+            salvarTudoNoDisco({ transacoes: validas, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, historico: hist });
+            exibirNotificacao(descartadas.length ? '📥 Importado. ' + descartadas.length + ' lançamento(s) sem data ou valor ficaram de fora.' : '📥 Dados importados com sucesso!');
           } catch (err) {
             exibirNotificacao('❌ Arquivo de backup inválido.');
           }
@@ -1754,18 +1877,24 @@
 
               <div style={{ marginTop: '24px', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px' }}>
                 {usuarioNuvem ? (
+                  <React.Fragment>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     {usuarioNuvem.foto
                       ? <img src={usuarioNuvem.foto} alt="" width="34" height="34" referrerPolicy="no-referrer" style={{ borderRadius: '50%', flexShrink: 0 }} />
                       : <div style={{ width: '34px', height: '34px', borderRadius: '50%', backgroundColor: 'var(--accent)', color: 'var(--on-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', flexShrink: 0 }}>{(usuarioNuvem.nome || '?').charAt(0).toUpperCase()}</div>}
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <strong style={{ display: 'block', fontSize: '13px', color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{usuarioNuvem.nome}</strong>
-                      <span style={{ fontSize: '11px', color: statusNuvem === 'erro' ? 'var(--danger-text)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <CloudIcon size={12} /> {statusNuvem === 'sincronizado' ? 'Cópia na nuvem em dia' : statusNuvem === 'salvando' || statusNuvem === 'conectando' ? 'Sincronizando…' : 'Falha ao sincronizar'}
+                      <span style={{ fontSize: '11px', color: statusNuvem === 'erro' || statusNuvem === 'cheio' ? 'var(--danger-text)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <CloudIcon size={12} /> {statusNuvem === 'sincronizado' ? 'Cópia na nuvem em dia' : statusNuvem === 'salvando' || statusNuvem === 'conectando' ? 'Sincronizando…' : statusNuvem === 'cheio' ? 'Nuvem cheia: exporte um backup' : 'Sem conexão: tenta de novo sozinho'}
                       </span>
                     </div>
                     <button onClick={sairDaConta} title="Sair da conta" aria-label="Sair da conta" style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '4px' }}><LogOut size={16} /></button>
                   </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '11px' }}>
+                    <a href="./privacidade.html" style={{ color: 'var(--text-muted)', fontWeight: '600' }}>Privacidade</a>
+                    <button onClick={excluirConta} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--danger-text)', fontWeight: '600', fontSize: '11px', cursor: 'pointer' }}>Excluir minha conta e meus dados</button>
+                  </div>
+                  </React.Fragment>
                 ) : (
                   <React.Fragment>
                     <label htmlFor="nome-usuario" style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>Quem está usando</label>
@@ -1781,12 +1910,32 @@
               </div>
 
               <div style={{ marginTop: '22px' }}>
-                <button
-                  onClick={() => setModoTema(modoTema === 'claro' ? 'escuro' : 'claro')}
-                  style={{ width: '100%', marginBottom: '18px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}
-                >
-                  {modoTema === 'claro' ? '🌙 Mudar para tema escuro' : '☀️ Mudar para tema claro'}
-                </button>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 8px 0', fontWeight: '600', textTransform: 'uppercase' }}>Aparência</p>
+                <div role="radiogroup" aria-label="Aparência do app" style={{ display: 'flex', gap: '4px', padding: '4px', borderRadius: '12px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)' }}>
+                  {[
+                    { id: 'auto', rotulo: '🌗 Auto' },
+                    { id: 'claro', rotulo: '☀️ Claro' },
+                    { id: 'escuro', rotulo: '🌙 Escuro' }
+                  ].map(op => {
+                    const ativo = preferenciaTema === op.id;
+                    return (
+                      <button
+                        key={op.id}
+                        role="radio"
+                        aria-checked={ativo}
+                        onClick={() => setPreferenciaTema(op.id)}
+                        style={{ flex: 1, padding: '8px 4px', borderRadius: '9px', border: 'none', backgroundColor: ativo ? 'var(--accent)' : 'transparent', color: ativo ? 'var(--on-accent)' : 'var(--text)', fontWeight: ativo ? '700' : '600', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      >
+                        {op.rotulo}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '6px 0 18px 0' }}>
+                  {preferenciaTema === 'auto'
+                    ? 'Escuro das 18h às 6h, claro durante o dia' + (noite ? ' · agora: escuro' : ' · agora: claro')
+                    : 'Fica sempre ' + (preferenciaTema === 'escuro' ? 'escuro' : 'claro') + '. Toque em Auto para voltar ao horário.'}
+                </p>
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 10px 0', fontWeight: '600', textTransform: 'uppercase' }}>Cor do tema</p>
                 <div style={{ display: 'flex', gap: '10px' }}>
                   {Object.entries(TEMAS).map(([nome, t]) => (
@@ -2006,6 +2155,41 @@
                         </div>
                       )}
                     </div>
+                  </div>
+
+                  <div style={estilos.card}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                      <div>
+                        <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 4px 0' }}>Evolução dos últimos 6 meses</h3>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>Quanto entrou e quanto saiu da conta em cada mês</p>
+                      </div>
+                      <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><span style={{ width: '10px', height: '10px', borderRadius: '3px', backgroundColor: 'var(--accent)' }} /> Entrou</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><span style={{ width: '10px', height: '10px', borderRadius: '3px', backgroundColor: 'var(--danger-text)' }} /> Saiu</span>
+                      </div>
+                    </div>
+                    {!temEvolucao ? (
+                      <p style={{ color: 'var(--text-faint)', fontSize: '13px', margin: 0 }}>Os meses com lançamentos aparecem aqui.</p>
+                    ) : (
+                      <div role="img" aria-label={'Evolução: ' + evolucao.map(e => NOMES_MESES[Number(e.mes.slice(5, 7)) - 1] + ' entrou ' + formatarMoeda(e.entrou) + ' e saiu ' + formatarMoeda(e.saiu)).join('; ')} style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: isMobile ? '6px' : '14px', alignItems: 'end' }}>
+                        {evolucao.map(e => {
+                          const saldo = e.entrou - e.saiu;
+                          const selecionado = e.mes === mesSelecionado;
+                          return (
+                            <div key={e.mes} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                              <div style={{ height: '120px', width: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: '3px', borderBottom: '1px solid var(--border)' }}>
+                                <div title={'Entrou ' + formatarMoeda(e.entrou)} style={{ width: '40%', maxWidth: '22px', height: (e.entrou / maxEvolucao * 100) + '%', minHeight: e.entrou > 0 ? '3px' : 0, backgroundColor: 'var(--accent)', borderRadius: '4px 4px 0 0' }} />
+                                <div title={'Saiu ' + formatarMoeda(e.saiu)} style={{ width: '40%', maxWidth: '22px', height: (e.saiu / maxEvolucao * 100) + '%', minHeight: e.saiu > 0 ? '3px' : 0, backgroundColor: 'var(--danger-text)', borderRadius: '4px 4px 0 0' }} />
+                              </div>
+                              <span style={{ fontSize: '11px', fontWeight: selecionado ? '800' : '600', color: selecionado ? 'var(--accent-text)' : 'var(--text-muted)' }}>{NOMES_MESES[Number(e.mes.slice(5, 7)) - 1].slice(0, 3)}</span>
+                              <span style={{ fontSize: isMobile ? '9px' : '10px', fontWeight: '700', color: saldo >= 0 ? 'var(--accent-text)' : 'var(--danger-text)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                                {(e.entrou || e.saiu) ? (saldo >= 0 ? '+' : '−') + Math.abs(saldo).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : '—'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   <div style={estilos.card}>
@@ -2940,7 +3124,9 @@
               </div>
             )}
 
-            <p style={{ margin: 0, textAlign: 'center', fontSize: '11px', color: 'var(--text-faint)' }}>Seus dados ficam guardados na sua conta e só você tem acesso a eles.</p>
+            <p style={{ margin: 0, textAlign: 'center', fontSize: '11px', color: 'var(--text-faint)' }}>
+              Seus dados ficam guardados na sua conta e só você tem acesso a eles. {modo === 'criar' ? 'Ao criar a conta, você concorda com a ' : ''}<a href="./privacidade.html" style={{ color: 'var(--accent-text)', fontWeight: '600' }}>Política de Privacidade</a>.
+            </p>
           </div>
         </div>
       );
