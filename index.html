@@ -195,6 +195,42 @@
       });
     }
 
+    // ===== SINCRONIZAÇÃO COM A NUVEM =====
+    // Cada salvamento no aparelho ganha uma "versão" nova. A nuvem guarda a versão que recebeu e
+    // o aparelho lembra a última versão que combinou com a nuvem (a "base"). Comparando as três,
+    // o app sabe sozinho quem mudou, sem depender do relógio de cada aparelho.
+    const CHAVE_VERSAO_LOCAL = '@finapp_versaoLocal';
+    const CHAVE_BASE_NUVEM = '@finapp_nuvemBase';
+    const CHAVE_UID_NUVEM = '@finapp_uidNuvem';
+    const lerChave = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+    const gravarChave = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} };
+    const novaVersao = () => Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+    const temDados = (d) => !!d && ((d.transacoes || []).length > 0 || (d.metas || []).length > 0 || (d.recorrentes || []).length > 0);
+
+    // 'enviar' | 'baixar' | 'conflito' | 'nada'
+    function decidirSync(versaoLocal, base, versaoNuvem, temLocal, temNuvem) {
+      if (!temNuvem && !versaoNuvem) return temLocal ? 'enviar' : 'nada'; // conta ainda vazia
+      if (!base) return temLocal ? 'conflito' : 'baixar';                  // primeira vez neste aparelho
+      const localMudou = versaoLocal !== base;
+      const nuvemMudou = versaoNuvem !== base;
+      if (!localMudou && !nuvemMudou) return 'nada';
+      if (!nuvemMudou) return 'enviar';                                    // só o aparelho mudou (inclusive se apagou tudo)
+      if (!localMudou) return 'baixar';                                    // só a nuvem mudou
+      return 'conflito';                                                   // os dois mudaram
+    }
+
+    // Baixa um arquivo de backup (usado antes de descartar um dos lados num conflito)
+    function baixarBackup(dados, nome) {
+      try {
+        const blob = new Blob([JSON.stringify({ versao: 4, exportadoEm: new Date().toISOString(), ...dados }, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = nome;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) {}
+    }
+
     // ===== LANÇAMENTO RÁPIDO: entende frases como "gastei 46 na padaria" ou "recebi 3500 de salário" =====
     const semAcento = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
     const PALAVRAS_CATEGORIA = [
@@ -408,20 +444,22 @@
       };
     }
 
+    const LIMITES_PADRAO = {
+      'Salário': 0,
+      'Vendas': 0,
+      'Alimentação': 800,
+      'Transporte': 300,
+      'Moradia': 1200,
+      'Lazer': 400,
+      'Saúde': 200,
+      'Educação': 300,
+      'Outros': 200
+    };
+
     function App() {
       const [transacoes, setTransacoes] = useState([]);
       
-      const [limitesCategorias, setLimitesCategorias] = useState({
-        'Salário': 0,
-        'Vendas': 0,
-        'Alimentação': 800,
-        'Transporte': 300,
-        'Moradia': 1200,
-        'Lazer': 400,
-        'Saúde': 200,
-        'Educação': 300,
-        'Outros': 200
-      });
+      const [limitesCategorias, setLimitesCategorias] = useState(LIMITES_PADRAO);
 
       const [metas, setMetas] = useState([]);
       const [recorrentes, setRecorrentes] = useState([]);
@@ -527,6 +565,8 @@
       // Conta Google (só aparece quando FIREBASE_CONFIG estiver preenchido)
       const [usuarioNuvem, setUsuarioNuvem] = useState(null);
       const [statusNuvem, setStatusNuvem] = useState(FIREBASE_CONFIG ? 'saiu' : 'desligado');
+      // 'livre' (login desligado) | 'carregando' | 'fora' (mostra a tela de entrada) | 'dentro' | 'offline' | 'sem-internet'
+      const [estadoLogin, setEstadoLogin] = useState(FIREBASE_CONFIG ? 'carregando' : 'livre');
       const nuvemRef = useRef(null);
       const timerNuvem = useRef(null);
       const nomeAutor = (usuarioNuvem && usuarioNuvem.nome) || nomeUsuario.trim() || 'Você';
@@ -620,6 +660,8 @@
 
         try {
           gravarLocal(payload);
+          // Marca que este aparelho mudou: a nuvem vai receber esta versão
+          gravarChave(CHAVE_VERSAO_LOCAL, novaVersao());
           setSalvoEm(new Date());
         } catch (e) {
           exibirNotificacao('❌ Não foi possível salvar neste aparelho. Exporte um backup.');
@@ -628,24 +670,15 @@
         if (window.electronAPI) {
           window.electronAPI.saveData(payload).catch((e) => console.error("Erro ao salvar no Electron:", e));
         }
-        enviarParaNuvem(payload);
+        enviarParaNuvem();
       };
 
-      // Guarda uma cópia na nuvem (Firestore), 1,5 s depois da última mudança
-      const enviarParaNuvem = (payload) => {
-        const sessao = nuvemRef.current;
-        if (!sessao) return;
+      // Sincroniza com a nuvem 1,5 s depois da última mudança
+      const enviarParaNuvem = () => {
+        if (!nuvemRef.current) return;
         clearTimeout(timerNuvem.current);
         setStatusNuvem('salvando');
-        timerNuvem.current = setTimeout(() => {
-          sessao.doc.set({
-            nome: sessao.nome, email: sessao.email,
-            atualizadoEm: new Date().toISOString(),
-            dados: JSON.stringify(payload)
-          }, { merge: true })
-            .then(() => setStatusNuvem('sincronizado'))
-            .catch(() => setStatusNuvem('erro'));
-        }, 1500);
+        timerNuvem.current = setTimeout(() => { timerNuvem.current = null; sincronizar(); }, 1500);
       };
 
       // Coloca no app os dados que vieram da nuvem ou de um backup
@@ -654,67 +687,195 @@
         const novasMetas = Array.isArray(d.metas) ? d.metas.map(normalizarMeta) : [];
         const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes : [];
         const novasExtras = normalizarExtras(d.categoriasExtras);
-        const novosLimites = { ...(d.limitesCategorias || {}) };
+        const novosLimites = { ...LIMITES_PADRAO, ...(d.limitesCategorias || {}) };
         const novoHistorico = Array.isArray(d.historico) ? d.historico : [];
         setTransacoes(lista); setMetas(novasMetas); setRecorrentes(novosRecorrentes);
-        setCategoriasExtras(novasExtras); setLimitesCategorias(prev => ({ ...prev, ...novosLimites })); setHistorico(novoHistorico);
+        setCategoriasExtras(novasExtras); setLimitesCategorias(novosLimites); setHistorico(novoHistorico);
         return { transacoes: lista, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, limitesCategorias: novosLimites, historico: novoHistorico };
       };
 
-      // Liga o login do Google quando o Firebase estiver configurado
+      // Compara aparelho e nuvem e faz o que for preciso: enviar, baixar ou (só se os dois mudaram) perguntar.
+      // Lê tudo direto do aparelho, então funciona mesmo chamada de dentro de eventos antigos.
+      const sincronizandoRef = useRef(false);
+      const repetirSyncRef = useRef(false);
+      const sincronizar = async () => {
+        const sessao = nuvemRef.current;
+        if (!sessao) return 'sem-conta';
+        if (sincronizandoRef.current) { repetirSyncRef.current = true; return 'ocupado'; }
+        sincronizandoRef.current = true;
+        setStatusNuvem('salvando');
+        let resultado = 'erro';
+        try {
+          for (let tentativa = 0; tentativa < 3; tentativa++) {
+            const snap = await sessao.doc.get();
+            const dadosNuvem = snap.exists && snap.data().dados ? JSON.parse(snap.data().dados) : null;
+            const versaoNuvem = snap.exists ? (snap.data().versao || null) : null;
+            const local = lerLocal();
+            let versaoLocal = lerChave(CHAVE_VERSAO_LOCAL);
+            const base = lerChave(CHAVE_BASE_NUVEM);
+            let acao = decidirSync(versaoLocal, base, versaoNuvem, temDados(local), temDados(dadosNuvem));
+
+            if (acao === 'conflito') {
+              const ficarNuvem = window.confirm('Este aparelho e a sua conta têm mudanças diferentes desde a última sincronização.\n\n'
+                + 'OK = ficar com os dados da conta (' + (((dadosNuvem || {}).transacoes || []).length) + ' lançamentos)\n'
+                + 'Cancelar = ficar com os dados deste aparelho (' + ((local.transacoes || []).length) + ' lançamentos)\n\n'
+                + 'O lado que não for escolhido é salvo num arquivo de backup antes, para nada se perder.');
+              if (ficarNuvem) { baixarBackup(local, 'backup-deste-aparelho-' + hojeISO() + '.json'); acao = 'baixar'; }
+              else { baixarBackup(dadosNuvem || {}, 'backup-da-conta-' + hojeISO() + '.json'); acao = 'enviar'; }
+            }
+
+            if (acao === 'baixar') {
+              gravarLocal(aplicarDados(dadosNuvem || {}));
+              gravarChave(CHAVE_VERSAO_LOCAL, versaoNuvem);
+              gravarChave(CHAVE_BASE_NUVEM, versaoNuvem);
+              exibirNotificacao('Dados atualizados com a sua conta');
+              resultado = 'baixou';
+              break;
+            }
+            if (acao === 'enviar') {
+              if (!versaoLocal) { versaoLocal = novaVersao(); gravarChave(CHAVE_VERSAO_LOCAL, versaoLocal); }
+              // Só grava se a nuvem ainda estiver na versão que acabamos de ler; se outro aparelho
+              // enviou nesse meio-tempo, a gravação é recusada e o app compara de novo.
+              const doc = sessao.doc;
+              const mudouNoMeio = await sessao.fb.firestore().runTransaction(async (tx) => {
+                const atual = await tx.get(doc);
+                const versaoAgora = atual.exists ? (atual.data().versao || null) : null;
+                if (versaoAgora !== versaoNuvem) return true;
+                tx.set(doc, { nome: sessao.nome, email: sessao.email, atualizadoEm: new Date().toISOString(), versao: versaoLocal, dados: JSON.stringify(local) }, { merge: true });
+                return false;
+              });
+              if (mudouNoMeio) continue;
+              gravarChave(CHAVE_BASE_NUVEM, versaoLocal);
+              resultado = 'enviou';
+              break;
+            }
+            // nada a fazer: os dois lados já estão iguais
+            if (versaoLocal === versaoNuvem) gravarChave(CHAVE_BASE_NUVEM, versaoNuvem);
+            resultado = 'em-dia';
+            break;
+          }
+          setStatusNuvem(resultado === 'erro' ? 'erro' : 'sincronizado');
+        } catch (e) {
+          console.error('Erro ao sincronizar:', e);
+          setStatusNuvem('erro');
+        } finally {
+          sincronizandoRef.current = false;
+          if (repetirSyncRef.current) { repetirSyncRef.current = false; setTimeout(sincronizar, 300); }
+        }
+        return resultado;
+      };
+
+      // Apaga deste aparelho os dados da conta (ao sair ou ao trocar de conta)
+      const limparAparelho = () => {
+        Object.values(CHAVES_LOCAIS).forEach(k => gravarChave(k, null));
+        [CHAVE_VERSAO_LOCAL, CHAVE_BASE_NUVEM, CHAVE_UID_NUVEM].forEach(k => gravarChave(k, null));
+        aplicarDados({});
+      };
+
+      // Ao voltar para o app (trocou de aba ou desbloqueou o celular), busca o que mudou na nuvem
+      useEffect(() => {
+        const aoVoltar = () => { if (document.visibilityState === 'visible' && nuvemRef.current && !timerNuvem.current) sincronizar(); };
+        document.addEventListener('visibilitychange', aoVoltar);
+        return () => document.removeEventListener('visibilitychange', aoVoltar);
+      }, []);
+
+      // Liga o login quando o Firebase estiver configurado (com ele ligado, o app só abre depois de entrar)
       useEffect(() => {
         if (!FIREBASE_CONFIG) return;
         let cancelado = false;
         carregarFirebase().then(fb => {
           if (cancelado) return;
+          fb.auth().languageCode = 'pt-BR';
           fb.auth().getRedirectResult().catch(() => {});
           fb.auth().onAuthStateChanged(async (user) => {
-            if (!user) { nuvemRef.current = null; setUsuarioNuvem(null); setStatusNuvem('saiu'); return; }
+            if (!user) { nuvemRef.current = null; setUsuarioNuvem(null); setStatusNuvem('saiu'); setEstadoLogin('fora'); return; }
             const perfil = { uid: user.uid, nome: user.displayName || user.email, email: user.email, foto: user.photoURL };
             setUsuarioNuvem(perfil);
             setStatusNuvem('conectando');
             const doc = fb.firestore().collection('usuarios').doc(user.uid);
-            try {
-              const snap = await doc.get();
-              const daNuvem = snap.exists && snap.data().dados ? JSON.parse(snap.data().dados) : null;
-              // Lê direto do aparelho: aqui o estado da tela ainda pode ser o do início
-              const local = lerLocal();
-              const qtdLocal = (local.transacoes || []).length;
-              nuvemRef.current = { doc, nome: perfil.nome, email: perfil.email };
-              if (daNuvem && (daNuvem.transacoes || []).length > 0) {
-                const usarNuvem = qtdLocal === 0 || window.confirm('Sua conta já tem dados salvos na nuvem (' + daNuvem.transacoes.length + ' lançamentos). Usar os dados da nuvem neste aparelho?\n\nOK = usar os da nuvem\nCancelar = enviar os deste aparelho para a nuvem');
-                if (usarNuvem) {
-                  gravarLocal(aplicarDados(daNuvem));
-                  setStatusNuvem('sincronizado');
-                  exibirNotificacao('Dados da nuvem carregados');
-                  return;
-                }
-              }
-              enviarParaNuvem(local);
-            } catch (e) {
-              setStatusNuvem('erro');
+            // Os dados deste aparelho são de outra conta? Não mistura: apaga daqui e usa os desta conta.
+            const uidAnterior = lerChave(CHAVE_UID_NUVEM);
+            if (uidAnterior && uidAnterior !== user.uid && temDados(lerLocal())) {
+              const trocar = window.confirm('Este aparelho tem dados de outra conta.\n\nOK = apagar esses dados daqui (eles continuam na outra conta) e carregar os da conta ' + (user.email || '') + '\nCancelar = não entrar agora');
+              if (!trocar) { nuvemRef.current = null; await fb.auth().signOut(); return; }
+              limparAparelho();
             }
+            gravarChave(CHAVE_UID_NUVEM, user.uid);
+            nuvemRef.current = { fb, doc, nome: perfil.nome, email: perfil.email };
+            setEstadoLogin('dentro');
+            await sincronizar();
           });
-        }).catch(() => setStatusNuvem('erro'));
+        }).catch(() => {
+          // Sem internet para carregar o login: quem já entrou neste aparelho usa os dados daqui
+          setStatusNuvem('erro');
+          setEstadoLogin(lerChave(CHAVE_UID_NUVEM) ? 'offline' : 'sem-internet');
+        });
         return () => { cancelado = true; };
       }, []);
 
+      // Mensagens de erro do login em português
+      const traduzirErroLogin = (e) => ({
+        'auth/invalid-email': 'Esse e-mail não parece certo. Confira se digitou tudo.',
+        'auth/missing-email': 'Digite o seu e-mail.',
+        'auth/missing-password': 'Digite a sua senha.',
+        'auth/user-not-found': 'Não achamos conta com esse e-mail. Toque em "Criar conta".',
+        'auth/wrong-password': 'Senha errada. Tente de novo ou toque em "Esqueci a senha".',
+        'auth/invalid-credential': 'E-mail ou senha errados. Tente de novo ou toque em "Esqueci a senha".',
+        'auth/invalid-login-credentials': 'E-mail ou senha errados. Tente de novo ou toque em "Esqueci a senha".',
+        'auth/email-already-in-use': 'Já existe conta com esse e-mail. Toque em "Entrar".',
+        'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
+        'auth/too-many-requests': 'Muitas tentativas seguidas. Espere alguns minutos e tente de novo.',
+        'auth/network-request-failed': 'Sem internet. Conecte-se e tente de novo.',
+        'auth/popup-closed-by-user': 'A janela do Google foi fechada antes de terminar.',
+        'auth/cancelled-popup-request': 'A janela do Google foi fechada antes de terminar.',
+        'auth/account-exists-with-different-credential': 'Esse e-mail já entra de outro jeito (Google ou senha). Use a forma que você usou da primeira vez.',
+        'auth/operation-not-allowed': 'Essa forma de entrar ainda não foi ligada no Firebase.'
+      }[e && e.code] || 'Não foi possível entrar. Tente de novo.');
+
       const entrarComGoogle = async () => {
-        try {
-          const fb = await carregarFirebase();
-          const provedor = new fb.auth.GoogleAuthProvider();
-          const instalado = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-          if (instalado) { await fb.auth().signInWithRedirect(provedor); return; }
-          try { await fb.auth().signInWithPopup(provedor); }
-          catch (e) { if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) await fb.auth().signInWithRedirect(provedor); else throw e; }
-        } catch (e) {
-          exibirNotificacao('Não foi possível entrar com o Google. Tente de novo.');
+        const fb = await carregarFirebase();
+        const provedor = new fb.auth.GoogleAuthProvider();
+        provedor.setCustomParameters({ prompt: 'select_account' });
+        const instalado = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+        if (instalado) { await fb.auth().signInWithRedirect(provedor); return; }
+        try { await fb.auth().signInWithPopup(provedor); }
+        catch (e) { if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) await fb.auth().signInWithRedirect(provedor); else throw e; }
+      };
+
+      const entrarComEmail = async (email, senha) => {
+        const fb = await carregarFirebase();
+        await fb.auth().signInWithEmailAndPassword(email.trim(), senha);
+      };
+
+      const criarContaEmail = async (nome, email, senha) => {
+        const fb = await carregarFirebase();
+        const cred = await fb.auth().createUserWithEmailAndPassword(email.trim(), senha);
+        const nomeLimpo = nome.trim();
+        if (nomeLimpo && cred.user) {
+          await cred.user.updateProfile({ displayName: nomeLimpo });
+          setUsuarioNuvem(u => (u ? { ...u, nome: nomeLimpo } : u));
+          if (nuvemRef.current) nuvemRef.current.nome = nomeLimpo;
         }
       };
 
+      const esqueciSenha = async (email) => {
+        const fb = await carregarFirebase();
+        fb.auth().languageCode = 'pt-BR';
+        await fb.auth().sendPasswordResetEmail(email.trim());
+      };
+
+      // Sair: primeiro garante que tudo foi para a nuvem, depois apaga os dados deste aparelho
+      // (assim quem usar o aparelho depois não vê nem leva os seus dados)
       const sairDaConta = async () => {
-        if (!window.confirm('Sair da conta Google? Os dados continuam neste aparelho.')) return;
+        if (!window.confirm('Sair da conta?\n\nSeus dados ficam guardados na sua conta e são apagados deste aparelho. Para vê-los de novo, é só entrar outra vez.')) return;
+        clearTimeout(timerNuvem.current); timerNuvem.current = null;
+        let r = await sincronizar();
+        if (r === 'ocupado') { await new Promise(ok => setTimeout(ok, 1500)); r = await sincronizar(); }
+        if ((r === 'erro' || r === 'ocupado') && !window.confirm('Não foi possível enviar as últimas mudanças para a sua conta (sem internet?).\n\nSe sair agora, o que não foi enviado se perde. Sair mesmo assim?')) return;
+        nuvemRef.current = null;
         try { const fb = await carregarFirebase(); await fb.auth().signOut(); } catch (e) {}
+        limparAparelho();
+        exibirNotificacao('Você saiu. Os dados deste aparelho foram apagados');
       };
 
       // Anota uma ação no histórico e devolve a lista nova (para salvar junto)
@@ -1496,6 +1657,21 @@
       const botaoNovaCategoria = { background: 'none', border: '1px dashed var(--accent)', color: 'var(--accent-text)', borderRadius: '10px', padding: '8px 12px', fontWeight: '700', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' };
       const tituloSecao = { fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' };
 
+      // Com o login ligado, o app só abre depois de entrar (Google ou e-mail e senha)
+      if (estadoLogin === 'carregando' || estadoLogin === 'fora' || estadoLogin === 'sem-internet') {
+        return (
+          <TelaLogin
+            estado={estadoLogin}
+            aoGoogle={entrarComGoogle}
+            aoEntrar={entrarComEmail}
+            aoCriar={criarContaEmail}
+            aoEsqueci={esqueciSenha}
+            traduzir={traduzirErroLogin}
+            aoTentarDeNovo={() => location.reload()}
+          />
+        );
+      }
+
       return (
         <div className="app-root" style={estilos.container}>
 
@@ -1587,7 +1763,7 @@
                     <input id="nome-usuario" type="text" value={nomeUsuario} onChange={e => salvarNome(e.target.value)} placeholder="Seu nome" maxLength={40} style={{ ...estilos.input, marginTop: '6px', padding: '8px 12px', fontSize: '13px' }} />
                     <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: 'var(--text-faint)' }}>Aparece no histórico ao lado de cada registro.</p>
                     {FIREBASE_CONFIG && (
-                      <button onClick={entrarComGoogle} style={{ marginTop: '10px', width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: '700', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                      <button onClick={() => entrarComGoogle().catch(e => exibirNotificacao(traduzirErroLogin(e)))} style={{ marginTop: '10px', width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: '700', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                         <span style={{ fontWeight: '900', color: '#4285F4' }}>G</span> Entrar ou criar conta com Google
                       </button>
                     )}
@@ -2644,6 +2820,119 @@
             </div>
           )}
 
+        </div>
+      );
+    }
+
+    // ===== TELA DE ENTRADA (login obrigatório quando o Firebase está ligado) =====
+    function TelaLogin({ estado, aoGoogle, aoEntrar, aoCriar, aoEsqueci, traduzir, aoTentarDeNovo }) {
+      const [modo, setModo] = useState('entrar'); // 'entrar' | 'criar' | 'esqueci'
+      const [nome, setNome] = useState('');
+      const [email, setEmail] = useState('');
+      const [senha, setSenha] = useState('');
+      const [verSenha, setVerSenha] = useState(false);
+      const [erro, setErro] = useState('');
+      const [aviso, setAviso] = useState('');
+      const [ocupado, setOcupado] = useState(false);
+
+      const rodar = async (acao) => {
+        setErro(''); setAviso(''); setOcupado(true);
+        try { await acao(); } catch (e) { setErro(traduzir(e)); } finally { setOcupado(false); }
+      };
+      const trocarModo = (m) => { setModo(m); setErro(''); setAviso(''); };
+
+      const enviar = (e) => {
+        e.preventDefault();
+        if (modo === 'esqueci') return rodar(async () => {
+          if (!email.trim()) throw { code: 'auth/missing-email' };
+          await aoEsqueci(email);
+          setModo('entrar');
+          setAviso('Pronto! Enviamos um link para ' + email.trim() + '. Abra o e-mail (veja também o spam) para criar uma senha nova.');
+        });
+        if (!email.trim()) return setErro('Digite o seu e-mail.');
+        if (!senha) return setErro('Digite a sua senha.');
+        if (modo === 'criar') return rodar(async () => {
+          if (senha.length < 6) throw { code: 'auth/weak-password' };
+          await aoCriar(nome, email, senha);
+        });
+        return rodar(() => aoEntrar(email, senha));
+      };
+
+      const campo = { width: '100%', backgroundColor: 'var(--bg)', border: '1px solid var(--border-strong)', borderRadius: '12px', padding: '12px 14px', color: 'var(--text)', fontSize: '16px', outline: 'none', boxSizing: 'border-box', marginTop: '6px' };
+      const rotulo = { fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' };
+      const linkBotao = { background: 'none', border: 'none', color: 'var(--accent-text)', fontWeight: '700', fontSize: '13px', cursor: 'pointer', padding: '4px' };
+
+      return (
+        <div style={{ minHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 16px', backgroundColor: 'var(--bg)', boxSizing: 'border-box' }}>
+          <div style={{ width: '100%', maxWidth: '400px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', textAlign: 'center' }}>
+              <img src="./logo.png" alt="Logo EddFinança" width="72" height="72" style={{ borderRadius: '20px', boxShadow: '0 10px 24px rgba(59, 41, 152, 0.3)' }} />
+              <h1 style={{ margin: 0, fontSize: '26px', fontWeight: '800', color: 'var(--text-strong)' }}>EddFinança</h1>
+              <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-muted)' }}>
+                {modo === 'criar' ? 'Crie sua conta para guardar suas finanças com segurança.' : modo === 'esqueci' ? 'Vamos te mandar um link para criar uma senha nova.' : 'Entre para ver suas finanças em qualquer aparelho.'}
+              </p>
+            </div>
+
+            {estado === 'carregando' ? (
+              <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>Abrindo…</p>
+            ) : (
+              <div style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '20px', padding: '22px', display: 'flex', flexDirection: 'column', gap: '14px', boxShadow: '0 20px 40px -20px rgba(0,0,0,0.35)' }}>
+                {estado === 'sem-internet' && (
+                  <div role="alert" style={{ backgroundColor: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.4)', color: 'var(--c-amber)', borderRadius: '10px', padding: '10px 12px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                    <span>Sem internet. Conecte-se para entrar pela primeira vez neste aparelho.</span>
+                    <button type="button" onClick={aoTentarDeNovo} style={{ ...linkBotao, color: 'var(--c-amber)' }}>Tentar de novo</button>
+                  </div>
+                )}
+                {erro && <div role="alert" style={{ backgroundColor: 'rgba(244,63,94,0.12)', color: 'var(--danger-text)', padding: '10px 12px', borderRadius: '10px', fontSize: '13px' }}>{erro}</div>}
+                {aviso && <div role="status" style={{ backgroundColor: 'rgba(var(--accent-rgb), 0.12)', color: 'var(--accent-text)', padding: '10px 12px', borderRadius: '10px', fontSize: '13px' }}>{aviso}</div>}
+
+                {modo !== 'esqueci' && (
+                  <React.Fragment>
+                    <button type="button" disabled={ocupado} onClick={() => rodar(aoGoogle)} style={{ width: '100%', padding: '13px 14px', borderRadius: '12px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--surface)', color: 'var(--text-strong)', fontWeight: '700', fontSize: '15px', cursor: ocupado ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
+                      <span style={{ fontWeight: '900', fontSize: '18px', color: '#4285F4' }}>G</span> {modo === 'criar' ? 'Criar conta com Google' : 'Entrar com Google'}
+                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-faint)', fontSize: '12px' }}>
+                      <span style={{ flex: 1, height: '1px', backgroundColor: 'var(--border)' }} /> ou com e-mail <span style={{ flex: 1, height: '1px', backgroundColor: 'var(--border)' }} />
+                    </div>
+                  </React.Fragment>
+                )}
+
+                <form onSubmit={enviar} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {modo === 'criar' && (
+                    <div>
+                      <label htmlFor="login-nome" style={rotulo}>Seu nome</label>
+                      <input id="login-nome" type="text" autoComplete="name" value={nome} onChange={e => setNome(e.target.value)} placeholder="Como quer ser chamado" maxLength={40} style={campo} />
+                    </div>
+                  )}
+                  <div>
+                    <label htmlFor="login-email" style={rotulo}>E-mail</label>
+                    <input id="login-email" type="email" inputMode="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@exemplo.com" style={campo} />
+                  </div>
+                  {modo !== 'esqueci' && (
+                    <div>
+                      <label htmlFor="login-senha" style={rotulo}>{modo === 'criar' ? 'Crie uma senha (mínimo 6 caracteres)' : 'Senha'}</label>
+                      <div style={{ position: 'relative' }}>
+                        <input id="login-senha" type={verSenha ? 'text' : 'password'} autoComplete={modo === 'criar' ? 'new-password' : 'current-password'} value={senha} onChange={e => setSenha(e.target.value)} style={{ ...campo, paddingRight: '64px' }} />
+                        <button type="button" onClick={() => setVerSenha(!verSenha)} aria-label={verSenha ? 'Esconder senha' : 'Mostrar senha'} style={{ ...linkBotao, position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-40%)', fontSize: '12px', color: 'var(--text-muted)' }}>{verSenha ? 'Esconder' : 'Mostrar'}</button>
+                      </div>
+                    </div>
+                  )}
+                  <button type="submit" disabled={ocupado} style={{ width: '100%', background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%)', color: 'var(--on-accent)', padding: '13px 16px', borderRadius: '12px', fontWeight: 'bold', fontSize: '15px', border: 'none', cursor: ocupado ? 'wait' : 'pointer', opacity: ocupado ? 0.7 : 1 }}>
+                    {ocupado ? 'Aguarde…' : modo === 'criar' ? 'Criar conta' : modo === 'esqueci' ? 'Enviar link' : 'Entrar'}
+                  </button>
+                </form>
+
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', fontSize: '13px', color: 'var(--text-muted)' }}>
+                  {modo === 'entrar' && <button type="button" onClick={() => trocarModo('esqueci')} style={{ ...linkBotao, color: 'var(--text-muted)', fontWeight: '600' }}>Esqueci a senha</button>}
+                  {modo === 'entrar'
+                    ? <span>Ainda não tem conta? <button type="button" onClick={() => trocarModo('criar')} style={linkBotao}>Criar conta</button></span>
+                    : <span>{modo === 'criar' ? 'Já tem conta?' : 'Lembrou a senha?'} <button type="button" onClick={() => trocarModo('entrar')} style={linkBotao}>Entrar</button></span>}
+                </div>
+              </div>
+            )}
+
+            <p style={{ margin: 0, textAlign: 'center', fontSize: '11px', color: 'var(--text-faint)' }}>Seus dados ficam guardados na sua conta e só você tem acesso a eles.</p>
+          </div>
         </div>
       );
     }
