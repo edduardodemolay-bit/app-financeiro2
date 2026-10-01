@@ -155,7 +155,46 @@
     const CATEGORIAS_ENTRADA = ['Salário', 'Vendas', 'Outros'];
     const CATEGORIAS_SAIDA = ['Alimentação', 'Transporte', 'Moradia', 'Lazer', 'Saúde', 'Educação', 'Outros'];
     const CATEGORIA_PADRAO = { receita: 'Salário', despesa: 'Moradia', gasto: 'Alimentação' };
-    const categoriasDoTipo = (t) => (t === 'receita' ? CATEGORIAS_ENTRADA : CATEGORIAS_SAIDA);
+    // Categorias que a pessoa cria no Planejamento entram antes de "Outros"
+    const montarCategorias = (padrao, extras) => [...padrao.filter(c => c !== 'Outros'), ...(extras || []), 'Outros'];
+    // O valor planejado de ganhos fica numa chave própria, porque "Outros" existe nos dois grupos
+    const chaveLimite = (grupo, cat) => (grupo === 'entrada' ? 'prev:' + cat : cat);
+    const CORES_EXTRAS = [
+      { bg: 'rgba(236, 72, 153, 0.15)', color: '#db2777', border: 'rgba(236, 72, 153, 0.3)' },
+      { bg: 'rgba(132, 204, 22, 0.15)', color: '#65a30d', border: 'rgba(132, 204, 22, 0.3)' },
+      { bg: 'rgba(249, 115, 22, 0.15)', color: '#ea580c', border: 'rgba(249, 115, 22, 0.3)' },
+      { bg: 'rgba(6, 182, 212, 0.15)', color: '#0891b2', border: 'rgba(6, 182, 212, 0.3)' },
+      { bg: 'rgba(139, 92, 246, 0.15)', color: '#7c3aed', border: 'rgba(139, 92, 246, 0.3)' }
+    ];
+    const corDaCategoria = (cat) => {
+      if (CATEGORIA_CORES[cat]) return CATEGORIA_CORES[cat];
+      let h = 0;
+      for (const ch of String(cat || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      return CORES_EXTRAS[h % CORES_EXTRAS.length];
+    };
+    const EXPLICACAO_TIPO = {
+      receita: 'Dinheiro que entra: salário, vendas, pix recebido. Escolha abaixo se ele fica na conta ou vai direto para uma meta.',
+      despesa: 'Contas fixas e essenciais, que vêm todo mês: aluguel, luz, água, internet, escola.',
+      gasto: 'Gastos do dia a dia, que mudam de valor: mercado, lanche, Uber, lazer, compras.'
+    };
+
+    // Metas: o valor desejado fica fixo e o guardado é o valor inicial + cada movimentação.
+    // Cada movimentação fica registrada e pode ser excluída depois.
+    const guardadoDaMeta = (m) => Number(m.inicial || 0) + (m.aportes || []).reduce((a, x) => a + Number(x.valor), 0);
+    const normalizarMeta = (m) => (Array.isArray(m.aportes) ? m : { ...m, inicial: Number(m.economizado || 0), aportes: [] });
+
+    // Lançamentos ligados a uma meta (metaId + metaMov):
+    //  'aporte'   = gasto que sai da conta e vai para a meta
+    //  'retirada' = receita que sai da meta e volta para a conta
+    //  'entrada'  = receita que entra direto na meta (não passa pela conta)
+    // Mantém a lista de movimentações da meta igual aos lançamentos.
+    function sincronizarMeta(listaMetas, t, apenasRemover) {
+      let novas = listaMetas.map(m => ((m.aportes || []).some(a => a.transacaoId === t.id) ? { ...m, aportes: m.aportes.filter(a => a.transacaoId !== t.id) } : m));
+      if (apenasRemover || !t.metaId || !t.metaMov) return novas;
+      const valor = t.metaMov === 'retirada' ? -Number(t.amount) : Number(t.amount);
+      return novas.map(m => (m.id === t.metaId ? { ...m, aportes: [...(m.aportes || []), { id: t.id, valor, data: t.date, transacaoId: t.id, tipo: t.metaMov, descricao: t.description }] } : m));
+    }
+    const entraNaConta = (t) => t.metaMov !== 'entrada';
 
     // Aceita "12,50", "1.234,56", "2.000" (dois mil) ou "12.5"
     const lerValor = (texto) => {
@@ -219,7 +258,9 @@
         while (mes <= mesAtual && guarda < 240) {
           if (!gerados.has(mes)) {
             const dia = String(Math.min(r.dia, ultimoDia(mes))).padStart(2, '0');
-            novas.push({ id: base++, description: r.description, amount: r.amount, category: r.category, type: r.type, date: mes + '-' + dia, recorrenteId: r.id });
+            const nova = { id: base++, description: r.description, amount: r.amount, category: r.category, type: r.type, date: mes + '-' + dia, recorrenteId: r.id };
+            if (r.metaId && r.metaMov) { nova.metaId = r.metaId; nova.metaMov = r.metaMov; }
+            novas.push(nova);
             gerados.add(mes);
           }
           mes = somarMeses(mes, 1);
@@ -229,6 +270,7 @@
       });
       if (!novas.length) return null;
       return {
+        novas,
         recorrentes: atualizadas,
         transacoes: [...novas, ...transacoes].sort((a, b) => new Date(b.date) - new Date(a.date))
       };
@@ -314,6 +356,8 @@
       const [erroTransacao, setErroTransacao] = useState('');
       const [editandoId, setEditandoId] = useState(null);
       const [repetirMensal, setRepetirMensal] = useState(false);
+      // Para onde vai uma receita: 'conta' ou o id de uma meta
+      const [destinoReceita, setDestinoReceita] = useState('conta');
 
       const [modalMetaAberto, setModalMetaAberto] = useState(false);
       const [editandoMetaId, setEditandoMetaId] = useState(null);
@@ -324,6 +368,16 @@
       const [modalOrcamentoAberto, setModalOrcamentoAberto] = useState(false);
       const [categoriaEditando, setCategoriaEditando] = useState('Alimentação');
       const [novoLimiteCategoria, setNovoLimiteCategoria] = useState('');
+      // Categorias criadas pela pessoa: { entrada: [...], saida: [...] }
+      const [categoriasExtras, setCategoriasExtras] = useState({ entrada: [], saida: [] });
+      const [grupoEditando, setGrupoEditando] = useState('saida');
+      const [criandoCategoria, setCriandoCategoria] = useState(false);
+      const [nomeCategoriaEdit, setNomeCategoriaEdit] = useState('');
+      const [erroCategoria, setErroCategoria] = useState('');
+      const catEntrada = montarCategorias(CATEGORIAS_ENTRADA, categoriasExtras.entrada);
+      const catSaida = montarCategorias(CATEGORIAS_SAIDA, categoriasExtras.saida);
+      const categoriasDoTipo = (t) => (t === 'receita' ? catEntrada : catSaida);
+      const ehCategoriaCriada = (grupo, cat) => (categoriasExtras[grupo] || []).includes(cat);
 
       useEffect(() => {
         async function carregarDadosIniciais() {
@@ -333,7 +387,8 @@
               if (dadosDoDisco) {
                 if (dadosDoDisco.transacoes) setTransacoes(dadosDoDisco.transacoes);
                 if (dadosDoDisco.limitesCategorias) setLimitesCategorias(prev => ({ ...prev, ...dadosDoDisco.limitesCategorias }));
-                if (dadosDoDisco.metas) setMetas(dadosDoDisco.metas);
+                if (dadosDoDisco.metas) setMetas(dadosDoDisco.metas.map(normalizarMeta));
+                if (dadosDoDisco.categoriasExtras) setCategoriasExtras({ entrada: dadosDoDisco.categoriasExtras.entrada || [], saida: dadosDoDisco.categoriasExtras.saida || [] });
                 return;
               }
             } catch (e) {
@@ -347,13 +402,16 @@
             setTransacoes(listaTransacoes);
             const l = localStorage.getItem('@finapp_limitesCategorias');
             if (l) setLimitesCategorias(prev => ({ ...prev, ...JSON.parse(l) }));
+            const ce = localStorage.getItem('@finapp_categorias');
+            if (ce) { const c = JSON.parse(ce); setCategoriasExtras({ entrada: c.entrada || [], saida: c.saida || [] }); }
             // Metas zeradas a pedido do usuário (uma única vez): remove as metas salvas neste aparelho.
             if (!localStorage.getItem('@finapp_metas_zeradas')) {
               localStorage.setItem('@finapp_metas', '[]');
               localStorage.setItem('@finapp_metas_zeradas', '1');
             }
             const m = localStorage.getItem('@finapp_metas');
-            if (m) setMetas(JSON.parse(m));
+            const listaMetas = m ? JSON.parse(m).map(normalizarMeta) : [];
+            setMetas(listaMetas);
             const r = localStorage.getItem('@finapp_recorrentes');
             const listaRecorrentes = r ? JSON.parse(r) : [];
             setRecorrentes(listaRecorrentes);
@@ -361,10 +419,13 @@
             // Lança as contas fixas dos meses que passaram desde a última abertura
             const gerado = gerarLancamentosFixos(listaRecorrentes, listaTransacoes, mesDe(hojeISO()));
             if (gerado) {
+              const metasAtualizadas = gerado.novas.reduce((acc, t) => sincronizarMeta(acc, t), listaMetas);
               setTransacoes(gerado.transacoes);
               setRecorrentes(gerado.recorrentes);
+              setMetas(metasAtualizadas);
               localStorage.setItem('@finapp_transacoes', JSON.stringify(gerado.transacoes));
               localStorage.setItem('@finapp_recorrentes', JSON.stringify(gerado.recorrentes));
+              localStorage.setItem('@finapp_metas', JSON.stringify(metasAtualizadas));
             }
           } catch (e) {}
         }
@@ -388,7 +449,8 @@
           transacoes: novosDados.transacoes !== undefined ? novosDados.transacoes : transacoes,
           limitesCategorias: novosDados.limitesCategorias !== undefined ? novosDados.limitesCategorias : limitesCategorias,
           metas: novosDados.metas !== undefined ? novosDados.metas : metas,
-          recorrentes: novosDados.recorrentes !== undefined ? novosDados.recorrentes : recorrentes
+          recorrentes: novosDados.recorrentes !== undefined ? novosDados.recorrentes : recorrentes,
+          categoriasExtras: novosDados.categoriasExtras !== undefined ? novosDados.categoriasExtras : categoriasExtras
         };
 
         try {
@@ -396,6 +458,7 @@
           localStorage.setItem('@finapp_limitesCategorias', JSON.stringify(payload.limitesCategorias));
           localStorage.setItem('@finapp_metas', JSON.stringify(payload.metas));
           localStorage.setItem('@finapp_recorrentes', JSON.stringify(payload.recorrentes));
+          localStorage.setItem('@finapp_categorias', JSON.stringify(payload.categoriasExtras));
           setSalvoEm(new Date());
         } catch (e) {
           exibirNotificacao('❌ Não foi possível salvar neste aparelho. Exporte um backup.');
@@ -421,20 +484,23 @@
       const agendadosDoMes = transacoes.filter(t => mesDe(t.date) === mesSelecionado && ehFuturo(t)).sort((a, b) => a.date.localeCompare(b.date));
       const transacoesDoMes = transacoes.filter(t => mesDe(t.date) === mesSelecionado && !ehFuturo(t));
       const totalReceitas = somar(transacoesDoMes.filter(t => t.type === 'receita'));
+      // Receitas que ficaram na conta (as que foram direto para metas não entram no saldo da conta)
+      const receitasConta = somar(transacoesDoMes.filter(t => t.type === 'receita' && entraNaConta(t)));
+      const receitasParaMetas = totalReceitas - receitasConta;
       const totalDespesas = somar(transacoesDoMes.filter(t => t.type === 'despesa'));
       const totalGastos = somar(transacoesDoMes.filter(t => t.type === 'gasto'));
 
       const totalSaidas = totalDespesas + totalGastos;
-      const saldoMes = totalReceitas - totalSaidas;
+      const saldoMes = receitasConta - totalSaidas;
 
       // Saldo acumulado: tudo até o fim do mês escolhido
       const transacoesAteMes = transacoes.filter(t => mesDe(t.date) <= mesSelecionado && !ehFuturo(t));
       // Saldo do mês se todos os agendados acontecerem
-      const saldoPrevistoMes = saldoMes + somar(agendadosDoMes.filter(t => t.type === 'receita')) - somar(agendadosDoMes.filter(t => t.type !== 'receita'));
-      const saldoAcumulado = somar(transacoesAteMes.filter(t => t.type === 'receita')) - somar(transacoesAteMes.filter(t => t.type !== 'receita'));
+      const saldoPrevistoMes = saldoMes + somar(agendadosDoMes.filter(t => t.type === 'receita' && entraNaConta(t))) - somar(agendadosDoMes.filter(t => t.type !== 'receita'));
+      const saldoAcumulado = somar(transacoesAteMes.filter(t => t.type === 'receita' && entraNaConta(t))) - somar(transacoesAteMes.filter(t => t.type !== 'receita'));
 
       // "Metas" (aportes) fica fora do planejamento: é dinheiro guardado, não gasto
-      const categoriasDeGastos = CATEGORIAS_SAIDA;
+      const categoriasDeGastos = catSaida;
 
       const gastosPorCategoria = categoriasDeGastos.reduce((acc, cat) => {
         acc[cat] = somar(transacoesDoMes.filter(t => (t.type === 'despesa' || t.type === 'gasto') && t.category === cat));
@@ -446,7 +512,32 @@
       const saldoRestanteGeral = orcamentoTotalPlanejado - totalGastoGeral;
       const percentualOrcamento = orcamentoTotalPlanejado > 0 ? (totalGastoGeral / orcamentoTotalPlanejado) * 100 : 0;
 
+      // Planejamento de ganhos: quanto se espera receber em cada categoria de entrada
+      const ganhosPorCategoria = catEntrada.reduce((acc, cat) => {
+        acc[cat] = somar(transacoesDoMes.filter(t => t.type === 'receita' && t.category === cat && t.metaMov !== 'retirada'));
+        return acc;
+      }, {});
+      const ganhosPrevistos = catEntrada.reduce((a, cat) => a + Number(limitesCategorias[chaveLimite('entrada', cat)] || 0), 0);
+      const ganhosRecebidos = Object.values(ganhosPorCategoria).reduce((a, b) => a + b, 0);
+
+      // O orçamento do mês cresce a cada receita que entra na conta
+      const orcamentoDoMes = receitasConta;
+      const disponivelOrcamento = orcamentoDoMes - totalSaidas;
+
+      // Metas: totais e gráfico
+      const totalObjetivoMetas = metas.reduce((a, m) => a + Number(m.objetivo || 0), 0);
+      const totalGuardadoMetas = metas.reduce((a, m) => a + Math.max(0, guardadoDaMeta(m)), 0);
+      const totalFaltaMetas = metas.reduce((a, m) => a + Math.max(0, Number(m.objetivo || 0) - guardadoDaMeta(m)), 0);
+      const percentualMetas = totalObjetivoMetas > 0 ? Math.min(100, (totalGuardadoMetas / totalObjetivoMetas) * 100) : 0;
+      const temExemplos = transacoes.some(t => t.exemplo) || metas.some(m => m.exemplo);
+
       const ordenarPorData = (lista) => lista.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      // Dinheiro na conta hoje (tudo que já aconteceu, de todos os meses)
+      const saldoContaHoje = somar(transacoes.filter(t => !ehFuturo(t) && t.type === 'receita' && entraNaConta(t))) - somar(transacoes.filter(t => !ehFuturo(t) && t.type !== 'receita'));
+      // Nenhuma meta pode ficar com valor guardado negativo (seria tirar dinheiro que não existe)
+      const metaFicaNegativa = (lista) => lista.find(m => guardadoDaMeta(m) < -0.005);
+      const avisoMetaNegativa = (m) => 'Não dá: a meta "' + m.nome + '" ficaria com ' + formatarMoeda(guardadoDaMeta(m)) + '. Exclua antes a retirada que usou esse dinheiro.';
 
       function adicionarTransacao(e) {
         e.preventDefault();
@@ -457,34 +548,61 @@
         if (!dataTransacao) { setErroTransacao('Escolha a data do lançamento.'); return; }
 
         const dados = { description: descricao.trim(), amount: Math.round(numValor * 100) / 100, category: categoria, type: tipo, date: dataTransacao };
+        // Receita: fica na conta ou entra direto numa meta.
+        // Aportes e retiradas feitos pela tela de Metas mantêm a ligação que já têm.
+        const original = editandoId !== null ? transacoes.find(t => t.id === editandoId) : null;
+        const movFixo = original && (original.metaMov === 'aporte' || original.metaMov === 'retirada');
+        if (movFixo) {
+          // Aporte continua gasto e retirada continua receita, senão o dinheiro seria contado duas vezes
+          dados.type = original.type;
+          dados.category = original.category;
+        } else {
+          const metaDestino = tipo === 'receita' && destinoReceita !== 'conta' ? metas.find(m => String(m.id) === String(destinoReceita)) : null;
+          dados.metaId = metaDestino ? metaDestino.id : undefined;
+          dados.metaMov = metaDestino ? 'entrada' : undefined;
+        }
         let novasTransacoes;
         let novosRecorrentes = recorrentes;
+        let novasMetas = metas;
+        let afetadas = [];
 
         if (editandoId !== null) {
           novasTransacoes = ordenarPorData(transacoes.map(t => (t.id === editandoId ? { ...t, ...dados } : t)));
+          afetadas = novasTransacoes.filter(t => t.id === editandoId);
         } else if (repetirMensal) {
           // Conta fixa: lança este mês agora e os próximos automaticamente
           const rec = { id: Date.now(), ...dados, dia: Number(dataTransacao.slice(8, 10)), inicio: mesDe(dataTransacao), gerados: [mesDe(dataTransacao)], ativo: true };
           const nova = { id: Date.now() + 1, ...dados, recorrenteId: rec.id };
           novosRecorrentes = [...recorrentes, rec];
           novasTransacoes = ordenarPorData([nova, ...transacoes]);
+          afetadas = [nova];
           const gerado = gerarLancamentosFixos(novosRecorrentes, novasTransacoes, mesDe(hojeISO()));
-          if (gerado) { novasTransacoes = gerado.transacoes; novosRecorrentes = gerado.recorrentes; }
+          if (gerado) { novasTransacoes = gerado.transacoes; novosRecorrentes = gerado.recorrentes; afetadas = [nova, ...gerado.novas]; }
           setRecorrentes(novosRecorrentes);
         } else {
-          novasTransacoes = ordenarPorData([{ id: Date.now(), ...dados }, ...transacoes]);
+          const nova = { id: Date.now(), ...dados };
+          novasTransacoes = ordenarPorData([nova, ...transacoes]);
+          afetadas = [nova];
         }
+        // Ao editar, primeiro tira da meta antiga o valor que o lançamento tinha
+        const base = original ? sincronizarMeta(metas, original, true) : metas;
+        novasMetas = afetadas.reduce((acc, t) => sincronizarMeta(acc, t), base);
+        const negativa = metaFicaNegativa(novasMetas);
+        if (negativa) { setErroTransacao(avisoMetaNegativa(negativa)); return; }
 
         setTransacoes(novasTransacoes);
+        setMetas(novasMetas);
         fecharModalTransacao();
-        salvarTudoNoDisco({ transacoes: novasTransacoes, recorrentes: novosRecorrentes });
-        exibirNotificacao(editandoId !== null ? 'Lançamento atualizado' : repetirMensal ? 'Conta fixa criada: repete todo mês' : 'Lançamento guardado');
+        salvarTudoNoDisco({ transacoes: novasTransacoes, recorrentes: novosRecorrentes, metas: novasMetas });
+        const metaMsg = dados.metaMov === 'entrada' ? ' e somada à meta' : '';
+        exibirNotificacao((editandoId !== null ? 'Lançamento atualizado' : repetirMensal ? 'Conta fixa criada: repete todo mês' : 'Lançamento guardado') + metaMsg);
       }
 
       function fecharModalTransacao() {
         setModalTransacaoAberto(false);
         setEditandoId(null);
         setRepetirMensal(false);
+        setDestinoReceita('conta');
         setDescricao(''); setValor(''); setErroTransacao('');
       }
 
@@ -501,6 +619,7 @@
         setTipo(t.type);
         setCategoria(t.category);
         setDataTransacao(t.date);
+        setDestinoReceita(t.metaMov === 'entrada' && t.metaId ? String(t.metaId) : 'conta');
         setErroTransacao('');
         setModalTransacaoAberto(true);
       }
@@ -514,10 +633,16 @@
       }
 
       function excluirTransacao(id) {
-        if (confirm('Deseja excluir este lançamento?')) {
+        const alvo = transacoes.find(t => t.id === id);
+        const novasMetas = alvo ? sincronizarMeta(metas, alvo, true) : metas;
+        const negativa = metaFicaNegativa(novasMetas);
+        if (negativa) { exibirNotificacao(avisoMetaNegativa(negativa)); return; }
+        const aviso = alvo && alvo.metaId ? 'Deseja excluir este lançamento? O valor também sai da meta.' : 'Deseja excluir este lançamento?';
+        if (confirm(aviso)) {
           const novasTransacoes = transacoes.filter(t => t.id !== id);
           setTransacoes(novasTransacoes);
-          salvarTudoNoDisco({ transacoes: novasTransacoes });
+          setMetas(novasMetas);
+          salvarTudoNoDisco({ transacoes: novasTransacoes, metas: novasMetas });
         }
       }
 
@@ -540,8 +665,10 @@
         if (isNaN(guardado) || guardado < 0) { setErroMeta('O valor já guardado não pode ser negativo.'); return; }
 
         const novasMetas = editandoMetaId !== null
-          ? metas.map(m => (m.id === editandoMetaId ? { ...m, nome: nomeMeta.trim(), objetivo, economizado: guardado } : m))
-          : [...metas, { id: Date.now(), nome: nomeMeta.trim(), objetivo, economizado: guardado }];
+          ? metas.map(m => (m.id === editandoMetaId ? { ...m, nome: nomeMeta.trim(), objetivo, inicial: guardado } : m))
+          : [...metas, { id: Date.now(), nome: nomeMeta.trim(), objetivo, inicial: guardado, aportes: [] }];
+        const negativa = metaFicaNegativa(novasMetas);
+        if (negativa) { setErroMeta('O valor inicial não pode ser tão baixo: já foram retirados ' + formatarMoeda(guardado - guardadoDaMeta(negativa)) + ' desta meta.'); return; }
 
         setMetas(novasMetas);
         fecharModalMeta();
@@ -558,26 +685,30 @@
         setEditandoMetaId(meta.id);
         setNomeMeta(meta.nome);
         setObjetivoMeta(valorParaCampo(meta.objetivo));
-        setEconomizadoMeta(valorParaCampo(meta.economizado));
+        setEconomizadoMeta(valorParaCampo(meta.inicial || 0));
         setErroMeta('');
         setModalMetaAberto(true);
       }
 
       function alterarValorMeta(id, operacao) {
-        const quantia = lerValor(valoresAporte[id]);
-        if (isNaN(quantia) || quantia <= 0) { exibirNotificacao('Digite um valor, por exemplo 50,00'); return; }
+        const lido = lerValor(valoresAporte[id]);
+        if (isNaN(lido) || lido <= 0) { exibirNotificacao('Digite um valor, por exemplo 50,00'); return; }
+        const quantia = Math.round(lido * 100) / 100;
 
         const metaAlvo = metas.find(m => m.id === id);
-        const nomeDaMeta = metaAlvo ? metaAlvo.nome : 'Meta';
-
-        const novasMetas = metas.map(m => {
-          if (m.id === id) {
-            const atual = Number(m.economizado || 0);
-            const novoValor = operacao === 'somar' ? atual + quantia : Math.max(0, atual - quantia);
-            return { ...m, economizado: novoValor };
-          }
-          return m;
-        });
+        if (!metaAlvo) return;
+        const nomeDaMeta = metaAlvo.nome;
+        // Só retira o que a meta tem; só guarda o que a conta tem
+        const guardadoAtual = Math.round(guardadoDaMeta(metaAlvo) * 100) / 100;
+        if (operacao !== 'somar' && quantia > guardadoAtual) {
+          exibirNotificacao(guardadoAtual <= 0 ? 'Esta meta está zerada: não há o que retirar' : 'A meta só tem ' + formatarMoeda(guardadoAtual) + ' para retirar');
+          return;
+        }
+        const saldoAtual = Math.round(saldoContaHoje * 100) / 100;
+        if (operacao === 'somar' && quantia > saldoAtual) {
+          exibirNotificacao(saldoAtual <= 0 ? 'A conta está sem saldo. Lance a receita primeiro ou mande a receita direto para a meta' : 'A conta só tem ' + formatarMoeda(saldoAtual) + ' para guardar');
+          return;
+        }
 
         const novaTransacao = {
           id: Date.now(),
@@ -585,9 +716,12 @@
           amount: quantia,
           category: 'Metas',
           type: operacao === 'somar' ? 'gasto' : 'receita',
-          date: hojeISO()
+          date: hojeISO(),
+          metaId: id,
+          metaMov: operacao === 'somar' ? 'aporte' : 'retirada'
         };
 
+        const novasMetas = sincronizarMeta(metas, novaTransacao);
         const novasTransacoes = [novaTransacao, ...transacoes].sort((a, b) => new Date(b.date) - new Date(a.date));
 
         setMetas(novasMetas);
@@ -598,28 +732,173 @@
       }
 
       function excluirMeta(id) {
-        if (confirm('Deseja excluir esta meta?')) {
+        const meta = metas.find(m => m.id === id);
+        if (!meta) return;
+        // Dinheiro que saiu da conta para a meta (aportes − retiradas) volta para a conta; o valor inicial não veio da conta
+        const devolver = Math.round((meta.aportes || []).filter(a => a.tipo !== 'entrada').reduce((s, a) => s + Number(a.valor), 0) * 100) / 100;
+        const aviso = devolver > 0
+          ? 'Deseja excluir esta meta? Os ' + formatarMoeda(devolver) + ' que você guardou nela voltam para a conta, assim como as receitas que entraram direto nela.'
+          : 'Deseja excluir esta meta? As receitas que entraram direto nela passam a contar na conta.';
+        if (confirm(aviso)) {
           const novasMetas = metas.filter(m => m.id !== id);
+          // Receitas que iam direto para esta meta voltam a ser da conta; aportes e retiradas ficam no extrato como histórico
+          let novasTransacoes = transacoes.map(t => (t.metaId === id ? { ...t, metaId: undefined, metaMov: t.metaMov === 'entrada' ? undefined : t.metaMov } : t));
+          if (devolver > 0) novasTransacoes = ordenarPorData([{ id: Date.now(), description: 'Devolução da meta excluída: ' + meta.nome, amount: devolver, category: 'Metas', type: 'receita', date: hojeISO() }, ...novasTransacoes]);
+          const novosRecorrentes = recorrentes.map(r => (r.metaId === id ? { ...r, metaId: undefined, metaMov: undefined } : r));
           setMetas(novasMetas);
-          salvarTudoNoDisco({ metas: novasMetas });
+          setTransacoes(novasTransacoes);
+          setRecorrentes(novosRecorrentes);
+          salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes, recorrentes: novosRecorrentes });
         }
       }
 
-      function handleSalvarLimiteCategoria(e) {
-        e.preventDefault();
-        const val = lerValor(novoLimiteCategoria);
-        if (isNaN(val) || val < 0) { exibirNotificacao('Digite um limite válido, por exemplo 800,00'); return; }
+      // Exclui uma movimentação da meta (e o lançamento ligado a ela, se existir)
+      function excluirMovimentoMeta(meta, mov) {
+        const novasMetas = metas.map(m => (m.id === meta.id ? { ...m, aportes: (m.aportes || []).filter(a => a.id !== mov.id) } : m));
+        const negativa = metaFicaNegativa(novasMetas);
+        if (negativa) { exibirNotificacao(avisoMetaNegativa(negativa)); return; }
+        if (!confirm('Excluir esta movimentação de ' + formatarMoeda(Math.abs(mov.valor)) + ' da meta "' + meta.nome + '"? O lançamento ligado a ela também sai do extrato.')) return;
+        const novasTransacoes = mov.transacaoId ? transacoes.filter(t => t.id !== mov.transacaoId) : transacoes;
+        setMetas(novasMetas);
+        setTransacoes(novasTransacoes);
+        salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes });
+        exibirNotificacao('Movimentação excluída');
+      }
 
-        const novosLimites = { ...limitesCategorias, [categoriaEditando]: val };
+      // ===== DADOS DE EXEMPLO =====
+      // Ajudam a entender o app. Ficam marcados como "Exemplo" e saem todos de uma vez.
+      function carregarExemplos() {
+        const mes = mesDe(hojeISO());
+        const diaHoje = Number(hojeISO().slice(8, 10));
+        const d = (dia) => mes + '-' + String(Math.min(dia, diaHoje)).padStart(2, '0');
+        let id = Date.now();
+        const metaReserva = { id: id++, nome: 'Reserva de emergência (exemplo)', objetivo: 10000, inicial: 1500, aportes: [], exemplo: true };
+        const metaViagem = { id: id++, nome: 'Viagem de férias (exemplo)', objetivo: 4000, inicial: 0, aportes: [], exemplo: true };
+        const ex = (description, amount, category, type, dia, extra = {}) => ({ id: id++, description, amount, category, type, date: d(dia), exemplo: true, ...extra });
+        const lista = [
+          ex('Salário', 3500, 'Salário', 'receita', 5),
+          ex('Venda de produto', 450, 'Vendas', 'receita', 12),
+          ex('Venda online', 300, 'Vendas', 'receita', 15, { metaId: metaViagem.id, metaMov: 'entrada' }),
+          ex('Aluguel', 1100, 'Moradia', 'despesa', 10),
+          ex('Conta de luz', 180, 'Moradia', 'despesa', 10),
+          ex('Internet', 100, 'Moradia', 'despesa', 10),
+          ex('Escola / curso', 250, 'Educação', 'despesa', 8),
+          ex('Mercado do mês', 620, 'Alimentação', 'gasto', 6),
+          ex('Lanche', 45, 'Alimentação', 'gasto', 14),
+          ex('Uber / ônibus', 130, 'Transporte', 'gasto', 9),
+          ex('Farmácia', 85, 'Saúde', 'gasto', 11),
+          ex('Cinema', 60, 'Lazer', 'gasto', 13),
+          ex('Aporte: Reserva de emergência (exemplo)', 200, 'Metas', 'gasto', 6, { metaId: metaReserva.id, metaMov: 'aporte' })
+        ];
+        const novasMetas = lista.reduce((acc, t) => sincronizarMeta(acc, t), [...metas, metaReserva, metaViagem]);
+        const novasTransacoes = ordenarPorData([...lista, ...transacoes]);
+        // Previsão de ganhos de exemplo, só onde ainda não há valor definido
+        const novosLimites = { ...limitesCategorias };
+        if (!Number(novosLimites['prev:Salário'])) novosLimites['prev:Salário'] = 3500;
+        if (!Number(novosLimites['prev:Vendas'])) novosLimites['prev:Vendas'] = 800;
+        setMetas(novasMetas);
+        setTransacoes(novasTransacoes);
         setLimitesCategorias(novosLimites);
+        setMesSelecionado(mes);
+        salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes, limitesCategorias: novosLimites });
+        exibirNotificacao('Dados de exemplo carregados');
+      }
+
+      function removerExemplos() {
+        if (!confirm('Remover todos os dados de exemplo? Seus lançamentos e metas reais continuam.')) return;
+        const removidas = transacoes.filter(t => t.exemplo);
+        let novasMetas = removidas.reduce((acc, t) => sincronizarMeta(acc, t, true), metas.filter(m => !m.exemplo));
+        const idsMetasExemplo = metas.filter(m => m.exemplo).map(m => m.id);
+        const novasTransacoes = transacoes.filter(t => !t.exemplo).map(t => (idsMetasExemplo.includes(t.metaId) ? { ...t, metaId: undefined, metaMov: undefined } : t));
+        setMetas(novasMetas);
+        setTransacoes(novasTransacoes);
+        salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes });
+        exibirNotificacao('Dados de exemplo removidos');
+      }
+
+      // ===== CATEGORIAS DO PLANEJAMENTO (criar, renomear, ajustar valor, excluir) =====
+      function abrirCategoria(grupo, cat) {
+        setGrupoEditando(grupo);
+        setCriandoCategoria(!cat);
+        setCategoriaEditando(cat || '');
+        setNomeCategoriaEdit(cat || '');
+        setNovoLimiteCategoria(cat ? valorParaCampo(Number(limitesCategorias[chaveLimite(grupo, cat)] || 0)) : '');
+        setErroCategoria('');
+        setModalOrcamentoAberto(true);
+      }
+
+      function fecharCategoria() {
         setModalOrcamentoAberto(false);
         setNovoLimiteCategoria('');
-        salvarTudoNoDisco({ limitesCategorias: novosLimites });
+        setErroCategoria('');
+      }
+
+      // Troca o nome da categoria em todos os lançamentos e contas fixas do mesmo grupo
+      const trocarCategoriaNosLancamentos = (grupo, de, para) => {
+        const doGrupo = (t) => (grupo === 'entrada' ? t.type === 'receita' : t.type !== 'receita');
+        return {
+          transacoes: transacoes.map(t => (t.category === de && doGrupo(t) ? { ...t, category: para } : t)),
+          recorrentes: recorrentes.map(r => (r.category === de && doGrupo(r) ? { ...r, category: para } : r))
+        };
+      };
+
+      function handleSalvarLimiteCategoria(e) {
+        e.preventDefault();
+        setErroCategoria('');
+        const val = novoLimiteCategoria === '' ? 0 : lerValor(novoLimiteCategoria);
+        if (isNaN(val) || val < 0) { setErroCategoria('Digite um valor válido, por exemplo 800,00'); return; }
+
+        const grupo = grupoEditando;
+        const podeRenomear = criandoCategoria || ehCategoriaCriada(grupo, categoriaEditando);
+        const nome = podeRenomear ? nomeCategoriaEdit.trim().replace(/\s+/g, ' ') : categoriaEditando;
+        if (!nome) { setErroCategoria('Dê um nome para a categoria, por exemplo "Pets" ou "Freelance".'); return; }
+        if (nome.length > 30) { setErroCategoria('Use um nome com até 30 letras.'); return; }
+        const todas = [...catEntrada, ...catSaida, 'Metas'].filter(c => c !== categoriaEditando);
+        if (nome !== categoriaEditando && todas.some(c => c.toLowerCase() === nome.toLowerCase())) { setErroCategoria('Já existe uma categoria chamada "' + nome + '".'); return; }
+
+        let novosLimites = { ...limitesCategorias };
+        let novasExtras = categoriasExtras;
+        let novos = { transacoes, recorrentes };
+        if (criandoCategoria) {
+          novasExtras = { ...categoriasExtras, [grupo]: [...(categoriasExtras[grupo] || []), nome] };
+        } else if (nome !== categoriaEditando) {
+          novasExtras = { ...categoriasExtras, [grupo]: categoriasExtras[grupo].map(c => (c === categoriaEditando ? nome : c)) };
+          delete novosLimites[chaveLimite(grupo, categoriaEditando)];
+          novos = trocarCategoriaNosLancamentos(grupo, categoriaEditando, nome);
+        }
+        novosLimites[chaveLimite(grupo, nome)] = val;
+
+        setLimitesCategorias(novosLimites);
+        setCategoriasExtras(novasExtras);
+        setTransacoes(novos.transacoes);
+        setRecorrentes(novos.recorrentes);
+        fecharCategoria();
+        salvarTudoNoDisco({ limitesCategorias: novosLimites, categoriasExtras: novasExtras, transacoes: novos.transacoes, recorrentes: novos.recorrentes });
+        exibirNotificacao(criandoCategoria ? 'Categoria "' + nome + '" criada' : 'Categoria atualizada');
+      }
+
+      function excluirCategoria() {
+        const grupo = grupoEditando, cat = categoriaEditando;
+        if (!ehCategoriaCriada(grupo, cat)) return;
+        const usados = transacoes.filter(t => t.category === cat).length;
+        if (!confirm('Excluir a categoria "' + cat + '"?' + (usados ? ' Os ' + usados + ' lançamentos dela passam para "Outros".' : ''))) return;
+        const novasExtras = { ...categoriasExtras, [grupo]: categoriasExtras[grupo].filter(c => c !== cat) };
+        const novosLimites = { ...limitesCategorias };
+        delete novosLimites[chaveLimite(grupo, cat)];
+        const novos = trocarCategoriaNosLancamentos(grupo, cat, 'Outros');
+        setCategoriasExtras(novasExtras);
+        setLimitesCategorias(novosLimites);
+        setTransacoes(novos.transacoes);
+        setRecorrentes(novos.recorrentes);
+        fecharCategoria();
+        salvarTudoNoDisco({ limitesCategorias: novosLimites, categoriasExtras: novasExtras, transacoes: novos.transacoes, recorrentes: novos.recorrentes });
+        exibirNotificacao('Categoria excluída');
       }
 
       const abrirModalComData = (dataFormatted) => {
         setEditandoId(null);
         setRepetirMensal(false);
+        setDestinoReceita('conta');
         setDescricao(''); setValor(''); setErroTransacao('');
         setDataTransacao(dataFormatted);
         setModalTransacaoAberto(true);
@@ -658,7 +937,7 @@
       const transacoesDiaSelecionado = transacoes.filter(t => t.date === diaSelecionado);
 
       const exportarDados = () => {
-        const dados = { versao: 2, exportadoEm: new Date().toISOString(), transacoes, limitesCategorias, metas, recorrentes };
+        const dados = { versao: 3, exportadoEm: new Date().toISOString(), transacoes, limitesCategorias, metas, recorrentes, categoriasExtras };
         const blob = new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -681,13 +960,15 @@
             if (!d || !Array.isArray(d.transacoes)) throw new Error('formato invalido');
             if (!window.confirm('Isso vai substituir os dados atuais deste aparelho. Continuar?')) return;
             const limites = d.limitesCategorias ? { ...limitesCategorias, ...d.limitesCategorias } : limitesCategorias;
-            const novasMetas = Array.isArray(d.metas) ? d.metas : metas;
+            const novasMetas = Array.isArray(d.metas) ? d.metas.map(normalizarMeta) : metas;
             const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes : [];
             setTransacoes(d.transacoes);
             setLimitesCategorias(limites);
             setMetas(novasMetas);
             setRecorrentes(novosRecorrentes);
-            salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes });
+            const novasExtras = d.categoriasExtras ? { entrada: d.categoriasExtras.entrada || [], saida: d.categoriasExtras.saida || [] } : categoriasExtras;
+            setCategoriasExtras(novasExtras);
+            salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras });
             exibirNotificacao('📥 Dados importados com sucesso!');
           } catch (err) {
             exibirNotificacao('❌ Arquivo de backup inválido.');
@@ -737,6 +1018,20 @@
       );
 
       const recorrentesAtivos = recorrentes.filter(r => r.ativo);
+
+      // Selos extras: "Exemplo" e para onde a receita foi (meta)
+      const selosExtras = (t) => {
+        const meta = t.metaMov === 'entrada' ? metas.find(m => m.id === t.metaId) : null;
+        return (
+          <React.Fragment>
+            {meta && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(168, 85, 247, 0.15)', color: 'var(--c-purple)', fontWeight: '700' }}>→ Meta: {meta.nome}</span>}
+            {t.exemplo && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--c-sky)', color: 'var(--c-sky)', fontWeight: '700', textTransform: 'uppercase' }}>Exemplo</span>}
+          </React.Fragment>
+        );
+      };
+
+      const botaoNovaCategoria = { background: 'none', border: '1px dashed var(--accent)', color: 'var(--accent-text)', borderRadius: '10px', padding: '8px 12px', fontWeight: '700', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' };
+      const tituloSecao = { fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' };
 
       return (
         <div className="app-root" style={estilos.container}>
@@ -836,6 +1131,9 @@
                     📥 Importar backup
                     <input type="file" accept="application/json,.json" onChange={importarDados} style={{ display: 'none' }} />
                   </label>
+                  <button onClick={() => { (temExemplos ? removerExemplos : carregarExemplos)(); setMenuAberto(false); }} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px dashed var(--c-sky)', backgroundColor: 'var(--bg)', color: 'var(--c-sky)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>
+                    {temExemplos ? '🧹 Remover dados de exemplo' : '✨ Carregar dados de exemplo'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -859,7 +1157,7 @@
               )}
               <h2 style={{ fontSize: isMobile ? '15px' : '20px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0, ...(isMobile ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : {}) }}>
                 {abaAtiva === 'dashboard' && 'Visão Geral do Mês'}
-                {abaAtiva === 'orcamento' && 'Planejamento de Gastos'}
+                {abaAtiva === 'orcamento' && 'Planejamento de Ganhos e Gastos'}
                 {abaAtiva === 'extrato' && 'Extrato de Lançamentos'}
                 {abaAtiva === 'metas' && 'Metas e Objetivos'}
                 {abaAtiva === 'calendario' && 'Calendário Anual Interativo'}
@@ -882,6 +1180,21 @@
               
               {abaAtiva === 'dashboard' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+                  {transacoes.length === 0 && metas.length === 0 && (
+                    <div style={{ ...estilos.card, border: '1px dashed var(--c-sky)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+                      <div style={{ minWidth: 0, flex: '1 1 260px' }}>
+                        <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', display: 'flex', alignItems: 'center', gap: '8px' }}><Sparkles size={18} color="var(--c-sky)" /> Primeira vez aqui?</h3>
+                        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>Carregue um mês de exemplo, com salário, vendas, contas fixas, gastos do dia a dia e metas, para ver como tudo funciona. Depois é só remover.</p>
+                      </div>
+                      <button onClick={carregarExemplos} style={{ ...estilos.buttonPrimary, background: 'var(--c-sky)', boxShadow: 'none' }}><Sparkles size={16} /> Carregar exemplos</button>
+                    </div>
+                  )}
+                  {temExemplos && (
+                    <div style={{ backgroundColor: 'rgba(14, 165, 233, 0.12)', border: '1px solid rgba(14, 165, 233, 0.35)', borderRadius: '14px', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', fontSize: '13px', color: 'var(--text)' }}>
+                      <span>Você está vendo <strong>dados de exemplo</strong> (marcados como "Exemplo"). Eles servem só para mostrar como o app funciona.</span>
+                      <button onClick={removerExemplos} style={{ background: 'none', border: '1px solid var(--c-sky)', color: 'var(--c-sky)', borderRadius: '8px', padding: '6px 12px', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>Remover exemplos</button>
+                    </div>
+                  )}
                   {seletorMes}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '20px' }}>
                     <div style={estilos.card}>
@@ -900,7 +1213,9 @@
                     <div style={estilos.card}>
                       <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Receitas</p>
                       <h3 style={{ fontSize: '24px', fontWeight: '700', color: 'var(--accent-text)', margin: 0 }}>{formatarMoeda(totalReceitas)}</h3>
-                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Salários, Vendas e Entradas</p>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>
+                        {receitasParaMetas > 0 ? <span>Na conta: {formatarMoeda(receitasConta)} · Para metas: {formatarMoeda(receitasParaMetas)}</span> : 'Salários, Vendas e Entradas'}
+                      </p>
                     </div>
 
                     <div style={estilos.card}>
@@ -933,7 +1248,7 @@
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         {transacoesDoMes.slice(0, 5).map(t => {
-                          const cfg = CATEGORIA_CORES[t.category] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
+                          const cfg = corDaCategoria(t.category);
                           return (
                             <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', padding: '14px 18px', borderRadius: '12px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
@@ -942,13 +1257,14 @@
                                 </div>
                                 <div>
                                   <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px' }}>{t.description}</p>
-                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type), fontWeight: '700', textTransform: 'uppercase' }}>
                                       {t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto'}
                                     </span>
                                     <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)}</span>
                                     {ehFuturo(t) && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--border-strong)', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase' }}>Agendado</span>}
+                                    {selosExtras(t)}
                                   </div>
                                 </div>
                               </div>
@@ -992,40 +1308,109 @@
               {abaAtiva === 'orcamento' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
                   {seletorMes}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '20px' }}>
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Teto Planejado</p>
-                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: 'var(--c-sky)', margin: 0 }}>{formatarMoeda(orcamentoTotalPlanejado)}</h3>
-                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Soma das categorias de saída</p>
+                      <p style={tituloSecao}>Orçamento do Mês</p>
+                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: 'var(--accent-text)', margin: 0 }}>{formatarMoeda(orcamentoDoMes)}</h3>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>{orcamentoDoMes > 0 ? 'Aumenta a cada receita que entra na conta' : 'Lance suas receitas: cada uma aumenta o orçamento'}</p>
                     </div>
 
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Total Consumido</p>
+                      <p style={tituloSecao}>Teto Planejado</p>
+                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: 'var(--c-sky)', margin: 0 }}>{formatarMoeda(orcamentoTotalPlanejado)}</h3>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Resta do teto: <strong style={{ color: saldoRestanteGeral >= 0 ? 'var(--accent-text)' : 'var(--danger-text)' }}>{formatarMoeda(saldoRestanteGeral)}</strong></p>
+                    </div>
+
+                    <div style={estilos.card}>
+                      <p style={tituloSecao}>Total Consumido</p>
                       <h3 style={{ fontSize: '26px', fontWeight: '800', color: totalGastoGeral > orcamentoTotalPlanejado ? 'var(--danger-text)' : '#f59e0b', margin: 0 }}>{formatarMoeda(totalGastoGeral)}</h3>
                       <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Despesas + Gastos</p>
                     </div>
 
                     <div style={estilos.card}>
-                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' }}>Disponível</p>
-                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: saldoRestanteGeral >= 0 ? 'var(--accent-text)' : 'var(--danger-text)', margin: 0 }}>{formatarMoeda(saldoRestanteGeral)}</h3>
-                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>{saldoRestanteGeral >= 0 ? 'Dentro da meta' : 'Excedido'}</p>
+                      <p style={tituloSecao}>Disponível</p>
+                      <h3 style={{ fontSize: '26px', fontWeight: '800', color: disponivelOrcamento >= 0 ? 'var(--accent-text)' : 'var(--danger-text)', margin: 0 }}>{formatarMoeda(disponivelOrcamento)}</h3>
+                      <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Orçamento − todas as saídas (inclui aportes em metas)</p>
                     </div>
                   </div>
 
+                  {orcamentoDoMes > 0 && orcamentoTotalPlanejado > orcamentoDoMes && (
+                    <div style={{ backgroundColor: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: '14px', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '12px', fontSize: '13px', color: 'var(--c-amber)' }}>
+                      <AlertTriangle size={18} /> O teto planejado ({formatarMoeda(orcamentoTotalPlanejado)}) está maior que o que entrou até agora ({formatarMoeda(orcamentoDoMes)}).
+                    </div>
+                  )}
+
                   <div style={estilos.card}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '12px', flexWrap: 'wrap', marginBottom: '24px' }}>
                       <div>
-                        <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0 }}>Planejamento de Saídas por Categoria</h3>
-                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Defina e controle o teto de despesas e gastos das categorias de saída</p>
+                        <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0 }}>Planejamento de Ganhos por Categoria</h3>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Quanto você espera receber no mês e quanto já entrou</p>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                          Recebido <strong style={{ color: 'var(--accent-text)' }}>{formatarMoeda(ganhosRecebidos)}</strong> de <strong style={{ color: 'var(--text-strong)' }}>{formatarMoeda(ganhosPrevistos)}</strong> previstos
+                        </span>
+                        <button onClick={() => abrirCategoria('entrada', null)} style={botaoNovaCategoria}><Plus size={14} /> Nova categoria de ganho</button>
                       </div>
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: '20px' }}>
+                      {catEntrada.map(cat => {
+                        const previsto = Number(limitesCategorias[chaveLimite('entrada', cat)] || 0);
+                        const recebido = ganhosPorCategoria[cat] || 0;
+                        const pct = previsto > 0 ? (recebido / previsto) * 100 : 0;
+                        const cfg = corDaCategoria(cat);
+                        const falta = previsto - recebido;
+                        return (
+                          <div key={cat} style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '8px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '700' }}>{cat}</span>
+                              <button
+                                onClick={() => abrirCategoria('entrada', cat)}
+                                style={{ background: 'none', border: 'none', color: 'var(--c-sky)', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                              >
+                                {ehCategoriaCriada('entrada', cat) ? <React.Fragment><Pencil size={14} /> Editar</React.Fragment> : <React.Fragment><Sliders size={14} /> Ajustar</React.Fragment>}
+                              </button>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                              <div>
+                                <span style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text-strong)' }}>{formatarMoeda(recebido)}</span>
+                                <span style={{ fontSize: '12px', color: 'var(--text-faint)', marginLeft: '6px' }}>/ {formatarMoeda(previsto)}</span>
+                              </div>
+                              <span style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--accent-text)' }}>{previsto > 0 ? pct.toFixed(0) + '%' : '—'}</span>
+                            </div>
+                            <div style={{ width: '100%', backgroundColor: 'var(--border)', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
+                              <div style={{ width: `${Math.min(100, pct)}%`, backgroundColor: 'var(--accent)', height: '100%', borderRadius: '999px', transition: 'width 0.3s ease' }}></div>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-faint)' }}>
+                              {previsto <= 0 ? <span>Toque em "Ajustar" para definir quanto espera receber</span> : (
+                                <React.Fragment>
+                                  <span>{falta > 0 ? 'Falta receber:' : 'Acima do previsto:'}</span>
+                                  <strong style={{ color: 'var(--accent-text)' }}>{formatarMoeda(Math.abs(falta))}</strong>
+                                </React.Fragment>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div style={estilos.card}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '12px', flexWrap: 'wrap', marginBottom: '24px' }}>
+                      <div>
+                        <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0 }}>Planejamento de Saídas por Categoria</h3>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Defina e controle o teto de despesas e gastos das categorias de saída</p>
+                      </div>
+                      <button onClick={() => abrirCategoria('saida', null)} style={botaoNovaCategoria}><Plus size={14} /> Nova categoria de gasto</button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: '20px' }}>
                       {categoriasDeGastos.map(cat => {
-                        const limite = limitesCategorias[cat] || 0;
+                        const limite = Number(limitesCategorias[cat] || 0);
                         const gasto = gastosPorCategoria[cat] || 0;
                         const pct = limite > 0 ? (gasto / limite) * 100 : 0;
-                        const cfg = CATEGORIA_CORES[cat] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
+                        const cfg = corDaCategoria(cat);
 
                         let corStatus = 'var(--accent)';
                         if (pct >= 80 && pct < 100) corStatus = '#f59e0b';
@@ -1038,14 +1423,10 @@
                                 {cat}
                               </span>
                               <button 
-                                onClick={() => {
-                                  setCategoriaEditando(cat);
-                                  setNovoLimiteCategoria(valorParaCampo(limite));
-                                  setModalOrcamentoAberto(true);
-                                }}
+                                onClick={() => abrirCategoria('saida', cat)}
                                 style={{ background: 'none', border: 'none', color: 'var(--c-sky)', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                               >
-                                <Sliders size={14} /> Ajustar
+                                {ehCategoriaCriada('saida', cat) ? <React.Fragment><Pencil size={14} /> Editar</React.Fragment> : <React.Fragment><Sliders size={14} /> Ajustar</React.Fragment>}
                               </button>
                             </div>
 
@@ -1089,7 +1470,7 @@
                       </select>
                       <select value={filtroCategoria} onChange={e => setFiltroCategoria(e.target.value)} style={estilos.input}>
                         <option value="todas">Todas as Categorias</option>
-                        {[...CATEGORIAS, 'Metas'].map(c => <option key={c} value={c}>{c}</option>)}
+                        {[...new Set([...catEntrada, ...catSaida, 'Metas'])].map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                   </div>
@@ -1122,7 +1503,7 @@
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         {transacoesFiltradas.map(t => {
-                          const cfg = CATEGORIA_CORES[t.category] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
+                          const cfg = corDaCategoria(t.category);
                           return (
                             <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', padding: isMobile ? '12px' : '14px 18px', borderRadius: '12px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '10px' : '14px', minWidth: 0 }}>
@@ -1143,6 +1524,7 @@
                                     </span>
                                     <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)}</span>
                                     {ehFuturo(t) && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--border-strong)', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase' }}>Agendado</span>}
+                                    {selosExtras(t)}
                                   </div>
                                 </div>
                               </div>
@@ -1170,13 +1552,65 @@
                     </button>
                   </div>
 
+                  {metas.length > 0 && (
+                    <React.Fragment>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '20px' }}>
+                        <div style={estilos.card}>
+                          <p style={tituloSecao}>Valor Total das Metas</p>
+                          <h3 style={{ fontSize: '26px', fontWeight: '800', color: 'var(--text-strong)', margin: 0 }}>{formatarMoeda(totalObjetivoMetas)}</h3>
+                          <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>{metas.length} {metas.length === 1 ? 'meta' : 'metas'}</p>
+                        </div>
+                        <div style={estilos.card}>
+                          <p style={tituloSecao}>Total Guardado</p>
+                          <h3 style={{ fontSize: '26px', fontWeight: '800', color: 'var(--accent-text)', margin: 0 }}>{formatarMoeda(totalGuardadoMetas)}</h3>
+                          <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>{percentualMetas.toFixed(0)}% do total</p>
+                        </div>
+                        <div style={estilos.card}>
+                          <p style={tituloSecao}>Falta Guardar</p>
+                          <h3 style={{ fontSize: '26px', fontWeight: '800', color: 'var(--c-purple)', margin: 0 }}>{formatarMoeda(totalFaltaMetas)}</h3>
+                          <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>Somando todas as metas</p>
+                        </div>
+                      </div>
+
+                      <div style={{ ...estilos.card, display: 'flex', gap: '28px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ position: 'relative', width: '150px', height: '150px', flexShrink: 0, margin: isMobile ? '0 auto' : 0 }} role="img" aria-label={'Progresso geral das metas: ' + percentualMetas.toFixed(0) + '%'}>
+                          <div style={{ width: '100%', height: '100%', borderRadius: '50%', background: `conic-gradient(var(--accent) ${percentualMetas * 3.6}deg, var(--border) 0deg)` }} />
+                          <div style={{ position: 'absolute', inset: '18px', borderRadius: '50%', backgroundColor: 'var(--card)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                            <strong style={{ fontSize: '26px', color: 'var(--text-strong)' }}>{percentualMetas.toFixed(0)}%</strong>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>do total</span>
+                          </div>
+                        </div>
+                        <div style={{ flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                          <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0 }}>Gráfico das Metas</h3>
+                          {metas.map(meta => {
+                            const g = Math.max(0, guardadoDaMeta(meta));
+                            const p = meta.objetivo > 0 ? Math.min(100, (g / meta.objetivo) * 100) : 0;
+                            return (
+                              <div key={meta.id}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '12px', marginBottom: '4px' }}>
+                                  <span style={{ color: 'var(--text)', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{meta.nome}</span>
+                                  <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatarMoeda(g)} / {formatarMoeda(meta.objetivo)}</span>
+                                </div>
+                                <div style={{ width: '100%', backgroundColor: 'var(--border)', height: '14px', borderRadius: '999px', overflow: 'hidden' }}>
+                                  <div style={{ width: `${p}%`, backgroundColor: p >= 100 ? 'var(--accent)' : 'var(--c-purple)', height: '100%', borderRadius: '999px', transition: 'width 0.3s ease' }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </React.Fragment>
+                  )}
+
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '20px' }}>
                     {metas.length === 0 ? (
                       <p style={{ color: 'var(--text-faint)', gridColumn: '1 / -1', textAlign: 'center', padding: '40px 0' }}>Nenhuma meta criada.</p>
                     ) : (
                       metas.map(meta => {
-                        const progresso = meta.objetivo > 0 ? (meta.economizado / meta.objetivo) * 100 : 0;
+                        const guardado = guardadoDaMeta(meta);
+                        const progresso = meta.objetivo > 0 ? (guardado / meta.objetivo) * 100 : 0;
                         const concluida = progresso >= 100;
+                        const movimentos = [...(meta.aportes || [])].sort((a, b) => String(b.data).localeCompare(String(a.data)) || b.id - a.id);
                         return (
                           <div key={meta.id} style={estilos.card}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px' }}>
@@ -1196,7 +1630,7 @@
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold' }}>
-                                <span style={{ color: 'var(--text-muted)' }}>Guardado: {formatarMoeda(meta.economizado)}</span>
+                                <span style={{ color: 'var(--text-muted)' }}>Guardado: {formatarMoeda(guardado)}</span>
                                 <span style={{ color: concluida ? 'var(--accent-text)' : 'var(--text-soft)' }}>{progresso.toFixed(0)}%</span>
                               </div>
                               <div style={{ width: '100%', backgroundColor: 'var(--bg)', height: '8px', borderRadius: '999px', overflow: 'hidden' }}>
@@ -1236,6 +1670,30 @@
                                   <Minus size={14} /> Retirar
                                 </button>
                               </div>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingTop: '12px', marginTop: '12px', borderTop: '1px solid var(--border)' }}>
+                              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Movimentações (dá para excluir cada uma):</span>
+                              {Number(meta.inicial || 0) > 0 && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', padding: '6px 8px', borderRadius: '8px', backgroundColor: 'var(--bg)' }}>
+                                  <span style={{ color: 'var(--text-muted)' }}>Valor inicial (mude no lápis)</span>
+                                  <strong style={{ color: 'var(--accent-text)' }}>+ {formatarMoeda(meta.inicial)}</strong>
+                                </div>
+                              )}
+                              {movimentos.length === 0 && Number(meta.inicial || 0) <= 0 && <span style={{ fontSize: '12px', color: 'var(--text-faint)', fontStyle: 'italic' }}>Nenhuma movimentação ainda.</span>}
+                              {movimentos.map(mov => (
+                                <div key={mov.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '12px', padding: '4px 4px 4px 8px', borderRadius: '8px', backgroundColor: 'var(--bg)' }}>
+                                  <span style={{ color: 'var(--text-muted)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {formatarDataBR(mov.data)} · {mov.tipo === 'entrada' ? 'Receita: ' + (mov.descricao || '') : mov.tipo === 'retirada' ? 'Retirada' : 'Aporte'}
+                                  </span>
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+                                    <strong style={{ color: mov.valor >= 0 ? 'var(--accent-text)' : 'var(--danger-text)' }}>{mov.valor >= 0 ? '+' : '-'} {formatarMoeda(Math.abs(mov.valor))}</strong>
+                                    <button onClick={() => excluirMovimentoMeta(meta, mov)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '4px' }} title="Excluir movimentação" aria-label="Excluir movimentação">
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </span>
+                                </div>
+                              ))}
                             </div>
                           </div>
                         );
@@ -1279,7 +1737,7 @@
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         {transacoesDiaSelecionado.map(t => {
-                          const cfg = CATEGORIA_CORES[t.category] || { bg: 'var(--border)', color: 'var(--text-soft)', border: 'var(--border-strong)' };
+                          const cfg = corDaCategoria(t.category);
                           return (
                             <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg)', padding: '12px 16px', borderRadius: '12px', border: '1px solid var(--border)' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1395,13 +1853,26 @@
                     </div>
                     <div>
                       <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Tipo de Lançamento</label>
-                      <select value={tipo} onChange={e => trocarTipo(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }}>
+                      <select value={tipo} onChange={e => trocarTipo(e.target.value)} disabled={editandoId !== null && ['aporte', 'retirada'].includes((transacoes.find(t => t.id === editandoId) || {}).metaMov)} title="Aportes e retiradas de metas não mudam de tipo" style={{ ...estilos.input, marginTop: '6px' }}>
                         <option value="receita">Receita (Entrada)</option>
                         <option value="despesa">Despesa (Fixa/Essencial)</option>
                         <option value="gasto">Gasto (Variável/Extra)</option>
                       </select>
                     </div>
                   </div>
+                  <p style={{ margin: '-6px 0 0 0', fontSize: '12px', color: 'var(--text-muted)', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '8px 12px' }}>
+                    💡 {EXPLICACAO_TIPO[tipo]}
+                  </p>
+                  {tipo === 'receita' && !(editandoId !== null && (transacoes.find(t => t.id === editandoId) || {}).metaMov === 'retirada') && (
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Para onde vai este dinheiro?</label>
+                      <select value={destinoReceita} onChange={e => setDestinoReceita(e.target.value)} style={{ ...estilos.input, marginTop: '6px' }}>
+                        <option value="conta">💳 Conta (fica no saldo e aumenta o orçamento)</option>
+                        {metas.map(m => <option key={m.id} value={String(m.id)}>🎯 Meta: {m.nome}</option>)}
+                      </select>
+                      {metas.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>Crie uma meta na aba Metas para poder mandar receitas direto para ela.</span>}
+                    </div>
+                  )}
                   <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
                     <div>
                       <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Categoria</label>
@@ -1445,7 +1916,7 @@
                       <input type="text" inputMode="decimal" value={objetivoMeta} onChange={e => setObjetivoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} required />
                     </div>
                     <div>
-                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Já Economizado</label>
+                      <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Valor Inicial Já Guardado</label>
                       <input type="text" inputMode="decimal" value={economizadoMeta} onChange={e => setEconomizadoMeta(e.target.value)} placeholder="0,00" style={{ ...estilos.input, marginTop: '6px' }} />
                     </div>
                   </div>
@@ -1462,28 +1933,56 @@
             <div style={estilos.modalOverlay}>
               <div style={estilos.modalContent}>
                 <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 8px 0' }}>
-                  Ajustar Limite - {categoriaEditando}
+                  {criandoCategoria
+                    ? (grupoEditando === 'entrada' ? 'Nova Categoria de Ganho' : 'Nova Categoria de Gasto')
+                    : (grupoEditando === 'entrada' ? 'Ganho Previsto' : 'Ajustar Limite') + ' - ' + categoriaEditando}
                 </h3>
-                <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 0 20px 0' }}>Defina o valor máximo de gastos mensal para esta categoria.</p>
-                
+                <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 0 20px 0' }}>{grupoEditando === 'entrada' ? 'Quanto você espera receber por mês nesta categoria.' : 'Defina o valor máximo de gastos mensal para esta categoria.'}</p>
+                {erroCategoria && <div style={{ backgroundColor: 'rgba(244,63,94,0.15)', color: 'var(--danger-text)', padding: '10px', borderRadius: '8px', fontSize: '12px', marginBottom: '16px' }}>{erroCategoria}</div>}
+
                 <form onSubmit={handleSalvarLimiteCategoria} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {(criandoCategoria || ehCategoriaCriada(grupoEditando, categoriaEditando)) && (
+                    <div>
+                      <label htmlFor="nome-categoria" style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Nome da Categoria</label>
+                      <input
+                        id="nome-categoria"
+                        type="text"
+                        value={nomeCategoriaEdit}
+                        onChange={e => setNomeCategoriaEdit(e.target.value)}
+                        placeholder={grupoEditando === 'entrada' ? 'Ex: Freelance, Aluguel recebido' : 'Ex: Pets, Assinaturas, Cartão'}
+                        maxLength={30}
+                        style={{ ...estilos.input, marginTop: '6px' }}
+                        autoFocus={criandoCategoria}
+                      />
+                    </div>
+                  )}
                   <div>
-                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Limite Mensal (R$)</label>
-                    <input 
-                      type="text" 
-                      inputMode="decimal" 
-                      value={novoLimiteCategoria} 
-                      onChange={e => setNovoLimiteCategoria(e.target.value)} 
-                      placeholder="0,00" 
-                      style={{ ...estilos.input, marginTop: '6px', fontSize: '16px', fontWeight: 'bold', color: 'var(--accent-text)' }} 
-                      required 
-                      autoFocus 
+                    <label htmlFor="valor-categoria" style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>{grupoEditando === 'entrada' ? 'Previsto por Mês (R$)' : 'Limite Mensal (R$)'}</label>
+                    <input
+                      id="valor-categoria"
+                      type="text"
+                      inputMode="decimal"
+                      value={novoLimiteCategoria}
+                      onChange={e => setNovoLimiteCategoria(e.target.value)}
+                      placeholder="0,00"
+                      style={{ ...estilos.input, marginTop: '6px', fontSize: '16px', fontWeight: 'bold', color: 'var(--accent-text)' }}
+                      autoFocus={!criandoCategoria}
                     />
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
-                    <button type="button" onClick={() => setModalOrcamentoAberto(false)} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
-                    <button type="submit" style={estilos.buttonPrimary}>Salvar Limite</button>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '8px' }}>
+                    {!criandoCategoria && ehCategoriaCriada(grupoEditando, categoriaEditando) ? (
+                      <button type="button" onClick={excluirCategoria} style={{ background: 'none', border: '1px solid rgba(244, 63, 94, 0.4)', color: 'var(--danger-text)', padding: '10px 14px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Trash2 size={14} /> Excluir categoria
+                      </button>
+                    ) : <span />}
+                    <div style={{ display: 'flex', gap: '12px', marginLeft: 'auto' }}>
+                      <button type="button" onClick={fecharCategoria} style={{ backgroundColor: 'var(--border)', color: 'var(--text)', border: 'none', padding: '10px 16px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' }}>Cancelar</button>
+                      <button type="submit" style={estilos.buttonPrimary}>{criandoCategoria ? 'Criar Categoria' : grupoEditando === 'entrada' ? 'Salvar Previsão' : 'Salvar'}</button>
+                    </div>
                   </div>
+                  {!criandoCategoria && !ehCategoriaCriada(grupoEditando, categoriaEditando) && (
+                    <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-faint)' }}>Categoria padrão do app: dá para mudar o valor. Nome e exclusão só nas categorias que você criar.</p>
+                  )}
                 </form>
               </div>
             </div>
