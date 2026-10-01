@@ -174,7 +174,9 @@
         .then(() => {
           if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
           return window.firebase;
-        });
+        })
+        // Se a internet falhar, a próxima tentativa carrega de novo em vez de repetir o erro
+        .catch((e) => { firebasePromessa = null; throw e; });
       return firebasePromessa;
     }
 
@@ -378,7 +380,8 @@
     // Cada conta fixa guarda os meses já gerados, então apagar um lançamento gerado não o recria.
     function gerarLancamentosFixos(recorrentes, transacoes, mesAtual) {
       const novas = [];
-      let base = Date.now();
+      // Os ids começam depois do maior id já usado, para nunca repetir o de um lançamento criado no mesmo instante
+      let base = transacoes.reduce((mx, t) => (typeof t.id === 'number' && t.id >= mx ? t.id + 1 : mx), Date.now());
       const atualizadas = recorrentes.map(r => {
         if (!r.ativo) return r;
         const gerados = new Set(r.gerados || []);
@@ -2295,7 +2298,13 @@
                   {historico.length === 0 ? (
                     <p style={{ color: 'var(--text-faint)', textAlign: 'center', padding: '32px 0' }}>Nenhum registro ainda. Faça um lançamento e ele aparece aqui.</p>
                   ) : (
-                    Object.entries(historico.reduce((acc, h) => { const dia = h.quando.slice(0, 10); (acc[dia] = acc[dia] || []).push(h); return acc; }, {})).map(([dia, itens]) => (
+                    Object.entries(historico.reduce((acc, h) => {
+                      // Dia no fuso do aparelho (o horário guardado é UTC; depois das 21h virava o dia seguinte)
+                      const q = new Date(h.quando);
+                      const dia = q.getFullYear() + '-' + String(q.getMonth() + 1).padStart(2, '0') + '-' + String(q.getDate()).padStart(2, '0');
+                      (acc[dia] = acc[dia] || []).push(h);
+                      return acc;
+                    }, {})).map(([dia, itens]) => (
                       <div key={dia} style={estilos.card}>
                         <h4 style={{ margin: '0 0 12px 0', fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{dia === hoje ? 'Hoje' : formatarDataBR(dia)}</h4>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
