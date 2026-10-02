@@ -48,6 +48,83 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ===== GESTÕES COMPARTILHADAS =====
+    // perfis/{id}: lista das gestões compartilhadas de cada conta (só a própria pessoa)
+    match /perfis/{uid} {
+      allow read, write: if dono(uid);
+    }
+
+    // espacos/{id}: nome, dono, membros { uid: 'dono' | 'convidado' }, nomes, código atual
+    function espaco(eid) { return get(/databases/$(database)/documents/espacos/$(eid)).data; }
+    function membroDe(eid) { return logado() && request.auth.uid in espaco(eid).membros; }
+    function donoDe(eid) { return logado() && espaco(eid).membros[request.auth.uid] == 'dono'; }
+    function convite(codigo) { return get(/databases/$(database)/documents/convites/$(codigo)).data; }
+
+    match /espacos/{eid} {
+      allow read: if logado() && request.auth.uid in resource.data.membros && !bloqueado(request.auth.uid);
+      // Criar: a pessoa é a única dona
+      allow create: if logado() && !bloqueado(request.auth.uid)
+        && request.resource.data.dono == request.auth.uid
+        && request.resource.data.membros.keys().hasOnly([request.auth.uid])
+        && request.resource.data.membros[request.auth.uid] == 'dono';
+      allow update: if logado() && !bloqueado(request.auth.uid) && (
+        // O dono muda nome, código e membros, mas não deixa de ser dono
+        (resource.data.membros[request.auth.uid] == 'dono'
+          && request.resource.data.dono == resource.data.dono
+          && request.resource.data.membros[request.auth.uid] == 'dono')
+        // Entrar com um código válido desta gestão, como convidado
+        || (!(request.auth.uid in resource.data.membros)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['membros', 'nomes', 'codigoUsado'])
+          && request.resource.data.membros.diff(resource.data.membros).affectedKeys().hasOnly([request.auth.uid])
+          && request.resource.data.membros[request.auth.uid] == 'convidado'
+          && request.resource.data.nomes.diff(resource.data.nomes).affectedKeys().hasOnly([request.auth.uid])
+          && convite(request.resource.data.codigoUsado).espaco == eid
+          && convite(request.resource.data.codigoUsado).ativo == true)
+        // Convidado sai da gestão
+        || (resource.data.membros[request.auth.uid] == 'convidado'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['membros', 'nomes'])
+          && request.resource.data.membros.diff(resource.data.membros).affectedKeys().hasOnly([request.auth.uid])
+          && !(request.auth.uid in request.resource.data.membros))
+      );
+      allow delete: if logado() && resource.data.dono == request.auth.uid;
+
+      // Todos os membros veem tudo. O convidado lança, mas só o dono apaga
+      // e só o dono muda metas e planejamento.
+      match /transacoes/{item} {
+        allow read, create: if membroDe(eid) && !bloqueado(request.auth.uid);
+        // Editar: o dono edita tudo; o convidado só o que ele mesmo lançou
+        allow update: if donoDe(eid) || (membroDe(eid) && !bloqueado(request.auth.uid)
+          && resource.data.get('autorUid', '') == request.auth.uid
+          && request.resource.data.get('autorUid', '') == request.auth.uid);
+        allow delete: if donoDe(eid);
+      }
+      match /recorrentes/{item} {
+        allow read, create, update: if membroDe(eid) && !bloqueado(request.auth.uid);
+        allow delete: if donoDe(eid);
+      }
+      match /historico/{item} {
+        allow read, create: if membroDe(eid) && !bloqueado(request.auth.uid);
+        allow update, delete: if donoDe(eid);
+      }
+      match /metas/{item} {
+        allow read: if membroDe(eid) && !bloqueado(request.auth.uid);
+        allow create, update, delete: if donoDe(eid);
+      }
+      match /config/{item} {
+        allow read: if membroDe(eid) && !bloqueado(request.auth.uid);
+        allow write: if donoDe(eid);
+      }
+    }
+
+    // convites/{codigo}: quem sabe o código consegue ler a qual gestão ele leva
+    match /convites/{codigo} {
+      allow get: if logado();
+      allow list: if false;
+      allow create: if logado() && espaco(request.resource.data.espaco).dono == request.auth.uid
+        && request.resource.data.criadoPor == request.auth.uid;
+      allow update, delete: if logado() && resource.data.criadoPor == request.auth.uid;
+    }
+
     // Qualquer outra coleção fica fechada
     match /{documento=**} {
       allow read, write: if false;
