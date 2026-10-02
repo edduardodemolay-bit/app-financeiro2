@@ -24,6 +24,15 @@ O QUE JÁ FOI FEITO NO FIREBASE
    (Esses valores não são senha: foram feitos para ficar no site.
     Quem protege os dados são as regras do Firestore.)
 
+GESTÃO COMPARTILHADA (duas ou mais contas na mesma gestão)
+   - No menu do app, em "Gestão": "+ Criar compartilhada" (ex.: "Casa").
+   - Aparece um código de convite (ex.: EDD-7KQ4MZ). Mande para a outra pessoa.
+   - Ela entra no app com a conta dela > "Entrar com código" > digita o código.
+   - O seletor "Gestão" troca entre a sua gestão pessoal e as compartilhadas.
+   - Quem entra pelo código pode lançar e ver; só o dono apaga e mexe em metas,
+     categorias e planejamento. O dono pode "Tirar" alguém, gerar "Novo código"
+     (o antigo para de funcionar) ou "Excluir gestão".
+
 COMO VIRAR ADMINISTRADOR
    - Crie a SUA conta normalmente no app.
    - No Firebase: Authentication > Users > copie o "UID do usuário" da sua conta.
