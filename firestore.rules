@@ -2,9 +2,9 @@ rules_version = '2';
 // Regras de acesso da nuvem (Firestore) do EddFinança.
 //
 //  usuarios/{id}  -> espaço individual de cada conta (lançamentos, metas, planejamento, histórico).
-//                    Só a própria pessoa lê e grava. Nem o administrador vê.
+//                    Só a própria pessoa lê, grava e apaga. Nem o administrador vê.
 //  acessos/{id}   -> cadastro e acessos de cada conta (nome completo, e-mail, idade, datas).
-//                    A pessoa cria o seu; o administrador vê todos e pode bloquear/liberar.
+//                    A pessoa cria e apaga o seu; o administrador vê todos e pode bloquear/liberar.
 //  admins/{id}    -> quem é administrador. Só se cria pelo console do Firebase.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -16,17 +16,18 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/acessos/$(uid)).data.get('bloqueado', false) == true;
     }
 
-    // Espaço individual: só o dono, e só se o acesso não estiver bloqueado
+    // Espaço individual: só o dono, e só se o acesso não estiver bloqueado.
+    // Apagar é permitido ao dono (botão "Excluir minha conta e meus dados", LGPD).
     match /usuarios/{uid} {
       allow read: if dono(uid) && !bloqueado(uid);
       allow create, update: if dono(uid) && !bloqueado(uid);
-      allow delete: if false;
+      allow delete: if dono(uid);
     }
 
     // Cadastro e acessos
     match /acessos/{uid} {
       allow read: if dono(uid) || ehAdmin();
-      // Criar o próprio cadastro: com o e-mail da própria conta e sem se bloquear/desbloquear
+      // Criar o próprio cadastro: com o e-mail da própria conta e sem se bloquear
       allow create: if dono(uid)
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.get('bloqueado', false) == false
@@ -37,7 +38,8 @@ service cloud.firestore {
           && request.resource.data.get('bloqueado', false) == resource.data.get('bloqueado', false)
           && request.resource.data.criadoEm == resource.data.criadoEm)
         || (ehAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['bloqueado', 'bloqueadoEm', 'bloqueadoPor']));
-      allow delete: if false;
+      // A própria pessoa pode apagar o cadastro ao excluir a conta
+      allow delete: if dono(uid);
     }
 
     // Administradores: cada um só confere a si mesmo; ninguém cria pelo app
