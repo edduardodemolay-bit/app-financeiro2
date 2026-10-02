@@ -194,7 +194,11 @@
       firebasePromessa = script('firebase-app-compat')
         .then(() => Promise.all([script('firebase-auth-compat'), script('firebase-firestore-compat')]))
         .then(() => {
-          if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
+          if (!window.firebase.apps.length) {
+            window.firebase.initializeApp(FIREBASE_CONFIG);
+            // Guarda uma cópia no aparelho: a gestão compartilhada abre e aceita lançamentos sem internet
+            try { window.firebase.firestore().enablePersistence({ synchronizeTabs: true }).catch(() => {}); } catch (e) {}
+          }
           return window.firebase;
         })
         // Se a internet falhar, a próxima tentativa carrega de novo em vez de repetir o erro
@@ -239,6 +243,54 @@
       if (!nuvemMudou) return 'enviar';                                    // só o aparelho mudou (inclusive se apagou tudo)
       if (!localMudou) return 'baixar';                                    // só a nuvem mudou
       return 'conflito';                                                   // os dois mudaram
+    }
+
+    // ===== GESTÃO COMPARTILHADA =====
+    // Uma "gestão compartilhada" (espacos/{id}) é usada por mais de uma conta. Cada lançamento, meta,
+    // conta fixa e registro do histórico é um documento separado; assim o que cada pessoa faz é
+    // juntado sozinho, sem um apagar o do outro. O dono convida pelo código; quem entra pelo código
+    // é "convidado": lança e vê, mas não apaga (as regras da nuvem garantem).
+    const COLECOES_ESPACO = ['transacoes', 'metas', 'recorrentes', 'historico'];
+    const CHAVE_ESPACO_ATIVO = '@finapp_espacoAtivo';
+    const chaveCacheEspaco = (id) => '@finapp_espaco_cache:' + id;
+    function gerarCodigoConvite() {
+      const letras = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // sem letras parecidas (0/O, 1/I/L)
+      const n = new Uint32Array(6);
+      (window.crypto || window.msCrypto).getRandomValues(n);
+      return 'EDD-' + Array.from(n, x => letras[x % letras.length]).join('');
+    }
+    const normalizarCodigo = (texto) => {
+      const s = String(texto || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const corpo = s.startsWith('EDD') ? s.slice(3) : s;
+      return corpo.length === 6 ? 'EDD-' + corpo : '';
+    };
+    // O valor guardado das metas é sempre refeito a partir dos lançamentos ligados a elas
+    function reconstruirAportes(metas, transacoes) {
+      return metas.map(m => ({
+        ...m,
+        aportes: transacoes
+          .filter(t => t.metaId != null && String(t.metaId) === String(m.id) && t.metaMov)
+          .map(t => ({ id: t.id, valor: t.metaMov === 'retirada' ? -Number(t.amount) : Number(t.amount), data: t.date, transacaoId: t.id, tipo: t.metaMov, descricao: t.description }))
+      }));
+    }
+    // O que mudou entre o que está na nuvem (antes) e o estado novo (depois)
+    function diferencasEspaco(antes, depois) {
+      const gravar = [], apagar = [];
+      COLECOES_ESPACO.forEach(col => {
+        const limpar = (item) => (col === 'metas' ? { ...item, aportes: [] } : item);
+        const mapaAntes = new Map((antes[col] || []).map(i => [String(i.id), JSON.stringify(limpar(i))]));
+        const idsDepois = new Set();
+        (depois[col] || []).forEach(i => {
+          const id = String(i.id);
+          idsDepois.add(id);
+          const texto = JSON.stringify(limpar(i));
+          if (mapaAntes.get(id) !== texto) gravar.push({ col, id, dados: JSON.parse(texto) });
+        });
+        mapaAntes.forEach((_, id) => { if (!idsDepois.has(id)) apagar.push({ col, id }); });
+      });
+      const cfgAntes = JSON.stringify({ limitesCategorias: antes.limitesCategorias || {}, categoriasExtras: antes.categoriasExtras || {} });
+      const cfgDepois = JSON.stringify({ limitesCategorias: depois.limitesCategorias || {}, categoriasExtras: depois.categoriasExtras || {} });
+      return { gravar, apagar, config: cfgAntes !== cfgDepois ? JSON.parse(cfgDepois) : null };
     }
 
     // Baixa um arquivo de backup (usado antes de descartar um dos lados num conflito)
@@ -438,8 +490,9 @@
     // Cada conta fixa guarda os meses já gerados, então apagar um lançamento gerado não o recria.
     function gerarLancamentosFixos(recorrentes, transacoes, mesAtual) {
       const novas = [];
-      // Os ids começam depois do maior id já usado, para nunca repetir o de um lançamento criado no mesmo instante
-      let base = transacoes.reduce((mx, t) => (typeof t.id === 'number' && t.id >= mx ? t.id + 1 : mx), Date.now());
+      // O código de cada lançamento gerado é fixo (conta + mês). Assim, se dois aparelhos da mesma
+      // gestão compartilhada gerarem o mesmo mês, é o mesmo lançamento e não aparece duplicado.
+      const existentes = new Set(transacoes.map(t => String(t.id)));
       const atualizadas = recorrentes.map(r => {
         if (!r.ativo) return r;
         const gerados = new Set(r.gerados || []);
@@ -448,9 +501,13 @@
         while (mes <= mesAtual && guarda < 240) {
           if (!gerados.has(mes)) {
             const dia = String(Math.min(r.dia, ultimoDia(mes))).padStart(2, '0');
-            const nova = { id: base++, description: r.description, amount: r.amount, category: r.category, type: r.type, date: mes + '-' + dia, recorrenteId: r.id };
-            if (r.metaId && r.metaMov) { nova.metaId = r.metaId; nova.metaMov = r.metaMov; }
-            novas.push(nova);
+            const id = r.id + '_' + mes;
+            if (!existentes.has(id)) {
+              const nova = { id, description: r.description, amount: r.amount, category: r.category, type: r.type, date: mes + '-' + dia, recorrenteId: r.id };
+              if (r.metaId && r.metaMov) { nova.metaId = r.metaId; nova.metaMov = r.metaMov; }
+              novas.push(nova);
+              existentes.add(id);
+            }
             gerados.add(mes);
           }
           mes = somarMeses(mes, 1);
@@ -458,7 +515,8 @@
         }
         return gerados.size === (r.gerados || []).length ? r : { ...r, gerados: [...gerados].sort() };
       });
-      if (!novas.length) return null;
+      const mudouRecorrente = atualizadas.some((r, i) => r !== recorrentes[i]);
+      if (!novas.length && !mudouRecorrente) return null;
       return {
         novas,
         recorrentes: atualizadas,
@@ -709,6 +767,11 @@
               localStorage.setItem('@finapp_metas', JSON.stringify(metasAtualizadas));
             }
           } catch (e) {}
+
+          // Se a última gestão aberta foi uma compartilhada, mostra a cópia dela enquanto o login carrega
+          if (espacoAtivoRef.current) {
+            try { aplicarDados(JSON.parse(localStorage.getItem(chaveCacheEspaco(espacoAtivoRef.current.id)) || '{}')); } catch (e) {}
+          }
         }
 
         carregarDadosIniciais();
@@ -723,6 +786,58 @@
         }, 3000);
       };
 
+      // ===== GESTÃO ATIVA: pessoal (null) ou compartilhada ({ id, nome, papel: 'dono' | 'convidado' }) =====
+      const espacoAtivoRef = useRef((() => { try { return JSON.parse(localStorage.getItem(CHAVE_ESPACO_ATIVO) || 'null'); } catch (e) { return null; } })());
+      const [espacoAtivo, setEspacoAtivoEstado] = useState(espacoAtivoRef.current);
+      const [espacos, setEspacos] = useState([]);               // gestões compartilhadas desta conta
+      const espacoServidorRef = useRef(null);                     // último estado da gestão vindo da nuvem
+      const escutasEspacoRef = useRef([]);
+      // Convidado lança e vê, mas não apaga nem muda metas, categorias e planejamento
+      const podeGerenciar = !espacoAtivo || espacoAtivo.papel === 'dono';
+      const meuUid = usuarioNuvem ? usuarioNuvem.uid : null;
+      const avisoSoDono = () => exibirNotificacao('Nesta gestão compartilhada, só o dono pode apagar ou mudar isso.');
+
+      // Envia para a gestão compartilhada só o que mudou (cada item é um documento)
+      const gravarNoEspaco = async (payload) => {
+        const esp = espacoAtivoRef.current;
+        const sessao = nuvemRef.current;
+        const servidor = espacoServidorRef.current;
+        if (!esp) return;
+        if (!sessao || !servidor) {
+          // Ainda sem conexão com a gestão: não arrisca gravar por cima do que a outra pessoa fez
+          exibirNotificacao('A gestão compartilhada ainda está carregando. Esta alteração não foi salva; tente de novo em instantes.');
+          if (servidor) aplicarDados(servidor);
+          return;
+        }
+        const dif = diferencasEspaco(servidor, payload);
+        const ops = [
+          ...dif.gravar.map(g => ({ tipo: 'gravar', ...g })),
+          ...(esp.papel === 'dono' ? dif.apagar.map(a => ({ tipo: 'apagar', ...a })) : []),
+          ...(dif.config && esp.papel === 'dono' ? [{ tipo: 'config', dados: dif.config }] : [])
+        ];
+        if (!ops.length) return;
+        setStatusNuvem('salvando');
+        const db = sessao.fb.firestore();
+        const base = db.collection('espacos').doc(esp.id);
+        try {
+          for (let i = 0; i < ops.length; i += 400) {
+            const lote = db.batch();
+            ops.slice(i, i + 400).forEach(o => {
+              if (o.tipo === 'gravar') lote.set(base.collection(o.col).doc(o.id), o.dados);
+              else if (o.tipo === 'apagar') lote.delete(base.collection(o.col).doc(o.id));
+              else lote.set(base.collection('config').doc('geral'), o.dados);
+            });
+            await lote.commit();
+          }
+          setStatusNuvem('sincronizado');
+        } catch (e) {
+          console.error('Gestão compartilhada:', e);
+          setStatusNuvem('erro');
+          exibirNotificacao(e && e.code === 'permission-denied' ? 'Você não tem permissão para essa alteração nesta gestão.' : 'Não foi possível enviar para a gestão compartilhada. O app tenta de novo quando a internet voltar.');
+          if (espacoServidorRef.current) aplicarDados(espacoServidorRef.current);
+        }
+      };
+
       // Tudo é salvo no aparelho a cada ação; não existe mais botão de salvar.
       const [salvoEm, setSalvoEm] = useState(null);
       const salvarTudoNoDisco = async (novosDados = {}) => {
@@ -734,6 +849,13 @@
           categoriasExtras: novosDados.categoriasExtras !== undefined ? novosDados.categoriasExtras : categoriasExtras,
           historico: novosDados.historico !== undefined ? novosDados.historico : historico
         };
+
+        // Na gestão compartilhada, os dados vão para ela (a gestão pessoal deste aparelho não muda)
+        if (espacoAtivoRef.current) {
+          setSalvoEm(new Date());
+          gravarNoEspaco(payload);
+          return;
+        }
 
         try {
           gravarLocal(payload);
@@ -802,10 +924,16 @@
             }
 
             if (acao === 'baixar') {
-              gravarLocal(aplicarDados(dadosNuvem || {}));
+              // Se a pessoa está vendo uma gestão compartilhada, só atualiza a pessoal no aparelho (sem trocar a tela)
+              if (espacoAtivoRef.current) {
+                const d = dadosNuvem || {};
+                gravarLocal({ ...d, transacoes: limparTransacoes(d.transacoes).validas, limitesCategorias: { ...LIMITES_PADRAO, ...(d.limitesCategorias || {}) } });
+              } else {
+                gravarLocal(aplicarDados(dadosNuvem || {}));
+              }
               gravarChave(CHAVE_VERSAO_LOCAL, versaoNuvem);
               gravarChave(CHAVE_BASE_NUVEM, versaoNuvem);
-              exibirNotificacao('Dados atualizados com a sua conta');
+              if (!espacoAtivoRef.current) exibirNotificacao('Dados atualizados com a sua conta');
               resultado = 'baixou';
               break;
             }
@@ -853,9 +981,249 @@
 
       // Apaga deste aparelho os dados da conta (ao sair ou ao trocar de conta)
       const limparAparelho = () => {
+        fecharEscutasEspaco();
+        espacoAtivoRef.current = null; setEspacoAtivoEstado(null); espacoServidorRef.current = null; setEspacos([]);
+        try { Object.keys(localStorage).filter(k => k.startsWith('@finapp_espaco_cache:')).forEach(k => localStorage.removeItem(k)); } catch (e) {}
         Object.values(CHAVES_LOCAIS).forEach(k => gravarChave(k, null));
-        [CHAVE_VERSAO_LOCAL, CHAVE_BASE_NUVEM, CHAVE_UID_NUVEM].forEach(k => gravarChave(k, null));
+        [CHAVE_VERSAO_LOCAL, CHAVE_BASE_NUVEM, CHAVE_UID_NUVEM, CHAVE_ESPACO_ATIVO].forEach(k => gravarChave(k, null));
         aplicarDados({});
+      };
+
+      // ===== GESTÃO COMPARTILHADA: abrir, criar, entrar com código, sair =====
+      const fecharEscutasEspaco = () => {
+        escutasEspacoRef.current.forEach(parar => { try { parar(); } catch (e) {} });
+        escutasEspacoRef.current = [];
+      };
+
+      // Troca a gestão que aparece na tela. null = a pessoal.
+      const abrirEspaco = (esp) => {
+        fecharEscutasEspaco();
+        espacoServidorRef.current = null;
+        espacoAtivoRef.current = esp || null;
+        setEspacoAtivoEstado(esp || null);
+        gravarChave(CHAVE_ESPACO_ATIVO, esp ? JSON.stringify(esp) : null);
+        if (!esp) { aplicarDados(lerLocal()); return; }
+
+        // Mostra a cópia do aparelho enquanto a nuvem responde
+        let copia = null;
+        try { copia = JSON.parse(localStorage.getItem(chaveCacheEspaco(esp.id)) || 'null'); } catch (e) {}
+        aplicarDados(copia || {});
+        const sessao = nuvemRef.current;
+        if (!sessao) return;
+        const base = sessao.fb.firestore().collection('espacos').doc(esp.id);
+        const estado = { transacoes: null, metas: null, recorrentes: null, historico: null, config: null };
+        let contasFixasConferidas = false;
+        const atualizar = () => {
+          if ((espacoAtivoRef.current || {}).id !== esp.id) return;        // trocou de gestão no meio do caminho
+          if (Object.values(estado).some(v => v === null)) return;        // espera tudo chegar da primeira vez
+          const trans = limparTransacoes(estado.transacoes).validas.sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)));
+          const dados = {
+            transacoes: trans,
+            metas: reconstruirAportes(estado.metas.map(normalizarMeta), trans),
+            recorrentes: estado.recorrentes,
+            historico: [...estado.historico].sort((a, b) => String(b.quando).localeCompare(String(a.quando))),
+            limitesCategorias: estado.config.limitesCategorias || {},
+            categoriasExtras: estado.config.categoriasExtras || {}
+          };
+          espacoServidorRef.current = dados;
+          aplicarDados(dados);
+          try { localStorage.setItem(chaveCacheEspaco(esp.id), JSON.stringify(dados)); } catch (e) {}
+          // Contas fixas dos meses que passaram (o código fixo evita duplicar se os dois aparelhos fizerem juntos)
+          if (!contasFixasConferidas) {
+            contasFixasConferidas = true;
+            const gerado = gerarLancamentosFixos(dados.recorrentes, dados.transacoes, mesDe(hojeISO()));
+            if (gerado) {
+              const novo = { ...dados, transacoes: gerado.transacoes, recorrentes: gerado.recorrentes, metas: reconstruirAportes(dados.metas, gerado.transacoes) };
+              aplicarDados(novo);
+              gravarNoEspaco(novo);
+            }
+          }
+        };
+        const aoFalhar = (e) => {
+          console.error('Gestão compartilhada:', e);
+          if ((espacoAtivoRef.current || {}).id !== esp.id) return;
+          if (e && e.code === 'permission-denied') {
+            exibirNotificacao('Você não faz mais parte da gestão "' + esp.nome + '". Voltando para a sua gestão pessoal.');
+            abrirEspaco(null);
+            carregarEspacos();
+          } else {
+            setStatusNuvem('erro');
+          }
+        };
+        COLECOES_ESPACO.forEach(col => {
+          escutasEspacoRef.current.push(base.collection(col).onSnapshot(s => { estado[col] = s.docs.map(d => d.data()); atualizar(); }, aoFalhar));
+        });
+        escutasEspacoRef.current.push(base.collection('config').doc('geral').onSnapshot(s => { estado.config = s.exists ? s.data() : {}; atualizar(); }, aoFalhar));
+      };
+      useEffect(() => () => fecharEscutasEspaco(), []);
+
+      // Busca as gestões compartilhadas desta conta
+      const carregarEspacos = async () => {
+        const sessao = nuvemRef.current;
+        if (!sessao) return [];
+        const db = sessao.fb.firestore();
+        const uid = sessao.fb.auth().currentUser && sessao.fb.auth().currentUser.uid;
+        if (!uid) return [];
+        try {
+          const perfil = await db.collection('perfis').doc(uid).get();
+          const ids = (perfil.exists && perfil.data().espacos) || [];
+          const lista = [];
+          const sumiram = [];
+          for (const id of ids) {
+            try {
+              const s = await db.collection('espacos').doc(id).get();
+              const d = s.exists ? s.data() : null;
+              if (d && d.membros && d.membros[uid]) lista.push({ id, nome: d.nome, papel: d.membros[uid], codigo: d.membros[uid] === 'dono' ? d.codigo : null, membros: d.membros, nomes: d.nomes || {}, dono: d.dono });
+              else sumiram.push(id);
+            } catch (e) { sumiram.push(id); }
+          }
+          if (sumiram.length) db.collection('perfis').doc(uid).set({ espacos: ids.filter(i => !sumiram.includes(i)) }, { merge: true }).catch(() => {});
+          setEspacos(lista);
+          // A gestão aberta saiu da lista (foi removido ou ela foi excluída): volta para a pessoal
+          const ativo = espacoAtivoRef.current;
+          if (ativo && !lista.some(e => e.id === ativo.id)) abrirEspaco(null);
+          else if (ativo) {
+            const atual = lista.find(e => e.id === ativo.id);
+            if (atual && (atual.papel !== ativo.papel || atual.nome !== ativo.nome)) { const novo = { id: atual.id, nome: atual.nome, papel: atual.papel }; espacoAtivoRef.current = novo; setEspacoAtivoEstado(novo); gravarChave(CHAVE_ESPACO_ATIVO, JSON.stringify(novo)); }
+          }
+          return lista;
+        } catch (e) {
+          console.error('Gestões:', e);
+          return [];
+        }
+      };
+
+      const [formEspaco, setFormEspaco] = useState(null); // null | 'criar' | 'entrar'
+      const [textoEspaco, setTextoEspaco] = useState('');
+      const [ocupadoEspaco, setOcupadoEspaco] = useState(false);
+
+      const criarEspaco = async () => {
+        const nome = textoEspaco.trim().replace(/\s+/g, ' ');
+        if (!nome) { exibirNotificacao('Dê um nome para a gestão, por exemplo "Casa".'); return; }
+        const sessao = nuvemRef.current;
+        if (!sessao) { exibirNotificacao('Sem conexão com a conta. Tente de novo.'); return; }
+        setOcupadoEspaco(true);
+        try {
+          const db = sessao.fb.firestore();
+          const uid = sessao.fb.auth().currentUser.uid;
+          const ref = db.collection('espacos').doc();
+          const codigo = gerarCodigoConvite();
+          const agora = new Date().toISOString();
+          await ref.set({ nome: nome.slice(0, 40), dono: uid, membros: { [uid]: 'dono' }, nomes: { [uid]: nomeAutor }, codigo, criadoEm: agora });
+          await db.collection('convites').doc(codigo).set({ espaco: ref.id, nomeEspaco: nome.slice(0, 40), nomeDono: nomeAutor, criadoPor: uid, ativo: true, criadoEm: agora });
+          await db.collection('perfis').doc(uid).set({ espacos: sessao.fb.firestore.FieldValue.arrayUnion(ref.id) }, { merge: true });
+          setFormEspaco(null); setTextoEspaco('');
+          await carregarEspacos();
+          abrirEspaco({ id: ref.id, nome: nome.slice(0, 40), papel: 'dono' });
+          exibirNotificacao('Gestão "' + nome + '" criada. Código de convite: ' + codigo);
+        } catch (e) {
+          console.error(e);
+          exibirNotificacao('Não foi possível criar a gestão. Confira a internet e tente de novo.');
+        }
+        setOcupadoEspaco(false);
+      };
+
+      const entrarComCodigo = async () => {
+        const codigo = normalizarCodigo(textoEspaco);
+        if (!codigo) { exibirNotificacao('Digite o código completo, por exemplo EDD-7KQ4MZ.'); return; }
+        const sessao = nuvemRef.current;
+        if (!sessao) { exibirNotificacao('Sem conexão com a conta. Tente de novo.'); return; }
+        setOcupadoEspaco(true);
+        try {
+          const db = sessao.fb.firestore();
+          const uid = sessao.fb.auth().currentUser.uid;
+          const conv = await db.collection('convites').doc(codigo).get();
+          if (!conv.exists || !conv.data().ativo) { exibirNotificacao('Código não encontrado ou desativado. Peça um código novo ao dono da gestão.'); setOcupadoEspaco(false); return; }
+          const c = conv.data();
+          if (espacos.some(e => e.id === c.espaco)) { exibirNotificacao('Você já participa da gestão "' + c.nomeEspaco + '".'); setOcupadoEspaco(false); return; }
+          if (!window.confirm('Entrar na gestão "' + c.nomeEspaco + '" de ' + c.nomeDono + '?\n\nVocê vai poder ver tudo e fazer lançamentos. Só o dono pode apagar. A sua gestão pessoal continua separada.')) { setOcupadoEspaco(false); return; }
+          await db.collection('espacos').doc(c.espaco).update({ ['membros.' + uid]: 'convidado', ['nomes.' + uid]: nomeAutor, codigoUsado: codigo });
+          await db.collection('perfis').doc(uid).set({ espacos: sessao.fb.firestore.FieldValue.arrayUnion(c.espaco) }, { merge: true });
+          setFormEspaco(null); setTextoEspaco('');
+          await carregarEspacos();
+          abrirEspaco({ id: c.espaco, nome: c.nomeEspaco, papel: 'convidado' });
+          exibirNotificacao('Você entrou na gestão "' + c.nomeEspaco + '"');
+        } catch (e) {
+          console.error(e);
+          exibirNotificacao('Não foi possível entrar com esse código. Confira o código e a internet.');
+        }
+        setOcupadoEspaco(false);
+      };
+
+      // Convidado sai; ou o dono tira alguém
+      const tirarDaGestao = async (esp, uidAlvo, nomeAlvo) => {
+        const sessao = nuvemRef.current;
+        if (!sessao) return;
+        const uid = sessao.fb.auth().currentUser.uid;
+        const souEu = uidAlvo === uid;
+        if (!window.confirm(souEu ? 'Sair da gestão "' + esp.nome + '"?\n\nVocê deixa de ver os lançamentos dela. Para voltar, vai precisar de um código novo.' : 'Tirar ' + (nomeAlvo || 'esta pessoa') + ' da gestão "' + esp.nome + '"?')) return;
+        try {
+          const db = sessao.fb.firestore();
+          const apagarCampo = sessao.fb.firestore.FieldValue.delete();
+          await db.collection('espacos').doc(esp.id).update({ ['membros.' + uidAlvo]: apagarCampo, ['nomes.' + uidAlvo]: apagarCampo });
+          if (souEu) {
+            await db.collection('perfis').doc(uid).set({ espacos: sessao.fb.firestore.FieldValue.arrayRemove(esp.id) }, { merge: true });
+            try { localStorage.removeItem(chaveCacheEspaco(esp.id)); } catch (e) {}
+            if (espacoAtivoRef.current && espacoAtivoRef.current.id === esp.id) abrirEspaco(null);
+          }
+          await carregarEspacos();
+          exibirNotificacao(souEu ? 'Você saiu da gestão' : (nomeAlvo || 'A pessoa') + ' saiu da gestão');
+        } catch (e) {
+          console.error(e);
+          exibirNotificacao('Não foi possível concluir. Tente de novo.');
+        }
+      };
+
+      // Dono troca o código (o antigo deixa de funcionar)
+      const novoCodigoEspaco = async (esp) => {
+        const sessao = nuvemRef.current;
+        if (!sessao || !window.confirm('Gerar um código novo? O código antigo deixa de funcionar (quem já entrou continua).')) return;
+        try {
+          const db = sessao.fb.firestore();
+          const uid = sessao.fb.auth().currentUser.uid;
+          const codigo = gerarCodigoConvite();
+          const agora = new Date().toISOString();
+          await db.collection('convites').doc(codigo).set({ espaco: esp.id, nomeEspaco: esp.nome, nomeDono: nomeAutor, criadoPor: uid, ativo: true, criadoEm: agora });
+          if (esp.codigo) await db.collection('convites').doc(esp.codigo).set({ ativo: false }, { merge: true }).catch(() => {});
+          await db.collection('espacos').doc(esp.id).update({ codigo });
+          await carregarEspacos();
+          exibirNotificacao('Código novo: ' + codigo);
+        } catch (e) {
+          console.error(e);
+          exibirNotificacao('Não foi possível gerar o código. Tente de novo.');
+        }
+      };
+
+      // Dono exclui a gestão compartilhada inteira
+      const excluirEspaco = async (esp) => {
+        const sessao = nuvemRef.current;
+        if (!sessao) return;
+        if (!window.confirm('Excluir a gestão "' + esp.nome + '" para todos?\n\nOs lançamentos, metas e contas fixas dela são apagados e ninguém mais vê. As gestões pessoais não mudam. Não dá para desfazer.')) return;
+        if (!window.confirm('Última confirmação: excluir "' + esp.nome + '"?')) return;
+        try {
+          const db = sessao.fb.firestore();
+          const uid = sessao.fb.auth().currentUser.uid;
+          const base = db.collection('espacos').doc(esp.id);
+          if (espacoAtivoRef.current && espacoAtivoRef.current.id === esp.id) abrirEspaco(null);
+          for (const col of [...COLECOES_ESPACO, 'config']) {
+            const docs = (await base.collection(col).get()).docs;
+            for (let i = 0; i < docs.length; i += 400) { const lote = db.batch(); docs.slice(i, i + 400).forEach(d => lote.delete(d.ref)); await lote.commit(); }
+          }
+          if (esp.codigo) await db.collection('convites').doc(esp.codigo).delete().catch(() => {});
+          await base.delete();
+          await db.collection('perfis').doc(uid).set({ espacos: sessao.fb.firestore.FieldValue.arrayRemove(esp.id) }, { merge: true });
+          try { localStorage.removeItem(chaveCacheEspaco(esp.id)); } catch (e) {}
+          await carregarEspacos();
+          exibirNotificacao('Gestão "' + esp.nome + '" excluída');
+        } catch (e) {
+          console.error(e);
+          exibirNotificacao('Não foi possível excluir a gestão. Tente de novo.');
+        }
+      };
+
+      const copiarCodigo = async (codigo) => {
+        try { await navigator.clipboard.writeText(codigo); exibirNotificacao('Código copiado: ' + codigo); }
+        catch (e) { window.prompt('Copie o código:', codigo); }
       };
 
       // Ao voltar para o app (trocou de aba ou desbloqueou o celular), busca o que mudou na nuvem
@@ -923,6 +1291,11 @@
             nuvemRef.current = { fb, doc, nome: perfil.nome, email: perfil.email };
             setEstadoLogin('dentro');
             await sincronizar();
+            // Gestões compartilhadas: reabre a que estava aberta (se a pessoa ainda participa)
+            const lista = await carregarEspacos();
+            const salvo = espacoAtivoRef.current;
+            const atual = salvo && lista.find(e => e.id === salvo.id);
+            if (atual) abrirEspaco({ id: atual.id, nome: atual.nome, papel: atual.papel });
           });
         }).catch(() => {
           // Sem internet para carregar o login: quem já entrou neste aparelho usa os dados daqui
@@ -1220,9 +1593,12 @@
         const qtdParcelas = usarDias ? 1 : Math.floor(Number(parcelas) || 1);
         if (editandoId === null && tipo !== 'receita' && !repetirMensal && (qtdParcelas < 1 || qtdParcelas > 48)) { setErroTransacao('Parcele em 1 a 48 vezes.'); return; }
         if (editandoId !== null) {
+          // Convidado da gestão compartilhada só edita o que ele mesmo lançou
+          if (!podeGerenciar && !(original && meuUid && original.autorUid === meuUid)) { setErroTransacao('Nesta gestão compartilhada, você só pode editar os lançamentos que você fez.'); return; }
           dados.editadoPor = nomeAutor;
         } else {
           dados.autor = nomeAutor;
+          if (meuUid) dados.autorUid = meuUid;
         }
 
         if (editandoId !== null) {
@@ -1284,7 +1660,7 @@
       // Salva direto o que o lançamento rápido entendeu
       function salvarLancamentoRapido() {
         if (!previaRapida) return;
-        const nova = { id: Date.now(), ...previaRapida, autor: nomeAutor, viaRapido: true };
+        const nova = { id: Date.now(), ...previaRapida, autor: nomeAutor, viaRapido: true, ...(meuUid ? { autorUid: meuUid } : {}) };
         const novasTransacoes = ordenarPorData([nova, ...transacoes]);
         const hist = anotar('Lançou pelo lançamento rápido', nova.description + ' · ' + formatarMoeda(nova.amount) + ' · ' + nova.category);
         setTransacoes(novasTransacoes);
@@ -1418,7 +1794,7 @@
         setModalTransacaoAberto(true);
       }
 
-      function pararRecorrente(id) {
+      function pararRecorrente(id) { if (!podeGerenciar) { avisoSoDono(); return; }
         if (!confirm('Parar de lançar esta conta todo mês? Os lançamentos que já existem continuam no extrato.')) return;
         const novos = recorrentes.map(r => (r.id === id ? { ...r, ativo: false } : r));
         setRecorrentes(novos);
@@ -1426,7 +1802,7 @@
         exibirNotificacao('Conta fixa encerrada');
       }
 
-      function excluirTransacao(id) {
+      function excluirTransacao(id) { if (!podeGerenciar) { avisoSoDono(); return; }
         const alvo = transacoes.find(t => t.id === id);
         const novasMetas = alvo ? sincronizarMeta(metas, alvo, true) : metas;
         const negativa = metaFicaNegativa(novasMetas);
@@ -1451,7 +1827,7 @@
       const [erroMeta, setErroMeta] = useState('');
 
       function adicionarMeta(e) {
-        e.preventDefault();
+        e.preventDefault(); if (!podeGerenciar) { avisoSoDono(); return; }
         setErroMeta('');
         const objetivo = lerValor(objetivoMeta);
         const guardado = economizadoMeta === '' ? 0 : lerValor(economizadoMeta);
@@ -1477,7 +1853,7 @@
         setNomeMeta(''); setObjetivoMeta(''); setEconomizadoMeta(''); setErroMeta('');
       }
 
-      function abrirEdicaoMeta(meta) {
+      function abrirEdicaoMeta(meta) { if (!podeGerenciar) { avisoSoDono(); return; }
         setEditandoMetaId(meta.id);
         setNomeMeta(meta.nome);
         setObjetivoMeta(valorParaCampo(meta.objetivo));
@@ -1514,7 +1890,9 @@
           type: operacao === 'somar' ? 'gasto' : 'receita',
           date: hojeISO(),
           metaId: id,
-          metaMov: operacao === 'somar' ? 'aporte' : 'retirada'
+          metaMov: operacao === 'somar' ? 'aporte' : 'retirada',
+          autor: nomeAutor,
+          ...(meuUid ? { autorUid: meuUid } : {})
         };
 
         const novasMetas = sincronizarMeta(metas, novaTransacao);
@@ -1528,7 +1906,7 @@
         salvarTudoNoDisco({ metas: novasMetas, transacoes: novasTransacoes, historico: hist });
       }
 
-      function excluirMeta(id) {
+      function excluirMeta(id) { if (!podeGerenciar) { avisoSoDono(); return; }
         const meta = metas.find(m => m.id === id);
         if (!meta) return;
         // Dinheiro que saiu da conta para a meta (aportes − retiradas) volta para a conta; o valor inicial não veio da conta
@@ -1551,7 +1929,7 @@
       }
 
       // Exclui uma movimentação da meta (e o lançamento ligado a ela, se existir)
-      function excluirMovimentoMeta(meta, mov) {
+      function excluirMovimentoMeta(meta, mov) { if (!podeGerenciar) { avisoSoDono(); return; }
         const novasMetas = metas.map(m => (m.id === meta.id ? { ...m, aportes: (m.aportes || []).filter(a => a.id !== mov.id) } : m));
         const negativa = metaFicaNegativa(novasMetas);
         if (negativa) { exibirNotificacao(avisoMetaNegativa(negativa)); return; }
@@ -1566,7 +1944,7 @@
 
       // ===== DADOS DE EXEMPLO =====
       // Ajudam a entender o app. Ficam marcados como "Exemplo" e saem todos de uma vez.
-      function carregarExemplos() {
+      function carregarExemplos() { if (!podeGerenciar) { avisoSoDono(); return; }
         const mes = mesDe(hojeISO());
         const diaHoje = Number(hojeISO().slice(8, 10));
         const d = (dia) => mes + '-' + String(Math.min(dia, diaHoje)).padStart(2, '0');
@@ -1603,7 +1981,7 @@
         exibirNotificacao('Dados de exemplo carregados');
       }
 
-      function removerExemplos() {
+      function removerExemplos() { if (!podeGerenciar) { avisoSoDono(); return; }
         if (!confirm('Remover todos os dados de exemplo? Seus lançamentos e metas reais continuam.')) return;
         const removidas = transacoes.filter(t => t.exemplo);
         let novasMetas = removidas.reduce((acc, t) => sincronizarMeta(acc, t, true), metas.filter(m => !m.exemplo));
@@ -1616,7 +1994,7 @@
       }
 
       // ===== CATEGORIAS DO PLANEJAMENTO (criar, renomear, ajustar valor, excluir) =====
-      function abrirCategoria(grupo, cat) {
+      function abrirCategoria(grupo, cat) { if (!podeGerenciar) { avisoSoDono(); return; }
         setGrupoEditando(grupo);
         setCriandoCategoria(!cat);
         setCategoriaEditando(cat || '');
@@ -1642,7 +2020,7 @@
       };
 
       function handleSalvarLimiteCategoria(e) {
-        e.preventDefault();
+        e.preventDefault(); if (!podeGerenciar) { avisoSoDono(); return; }
         setErroCategoria('');
         const val = novoLimiteCategoria === '' ? 0 : lerValor(novoLimiteCategoria);
         if (isNaN(val) || val < 0) { setErroCategoria('Digite um valor válido, por exemplo 800,00'); return; }
@@ -1694,7 +2072,7 @@
       }
 
       // Resposta à pergunta "a categoria continua nos próximos meses?"
-      function responderCategoria(grupo, cat, continua) {
+      function responderCategoria(grupo, cat, continua) { if (!podeGerenciar) { avisoSoDono(); return; }
         const chave = chaveInfo(grupo, cat);
         const atual = categoriasExtras.info[chave] || {};
         const novoInfo = continua ? { ...atual, confirmada: true, ate: null } : { ...atual, confirmada: false, ate: atual.criadaEm };
@@ -1705,7 +2083,7 @@
         exibirNotificacao(continua ? '"' + cat + '" continua nos próximos meses' : '"' + cat + '" fica só em ' + nomeDoMes(atual.criadaEm).toLowerCase());
       }
 
-      function excluirCategoria() {
+      function excluirCategoria() { if (!podeGerenciar) { avisoSoDono(); return; }
         const grupo = grupoEditando, cat = categoriaEditando;
         if (!ehCategoriaCriada(grupo, cat)) return;
         const usados = transacoes.filter(t => t.category === cat).length;
@@ -1805,6 +2183,7 @@
       };
 
       const importarDados = (e) => {
+        if (!podeGerenciar) { e.target.value = ''; avisoSoDono(); return; }
         const arquivo = e.target.files && e.target.files[0];
         if (!arquivo) return;
         const leitor = new FileReader();
@@ -1867,12 +2246,16 @@
 
       const botoesItem = (t) => (
         <div style={{ display: 'flex', gap: '4px' }}>
-          <button onClick={() => abrirEdicao(t)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Editar" aria-label={'Editar ' + t.description}>
-            <Pencil size={16} />
-          </button>
-          <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Excluir" aria-label={'Excluir ' + t.description}>
-            <Trash2 size={16} />
-          </button>
+          {(podeGerenciar || (meuUid && t.autorUid === meuUid)) && (
+            <button onClick={() => abrirEdicao(t)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Editar" aria-label={'Editar ' + t.description}>
+              <Pencil size={16} />
+            </button>
+          )}
+          {podeGerenciar && (
+            <button onClick={() => excluirTransacao(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Excluir" aria-label={'Excluir ' + t.description}>
+              <Trash2 size={16} />
+            </button>
+          )}
         </div>
       );
 
@@ -1903,7 +2286,7 @@
       })();
 
       // Pergunta, no mês seguinte, se as categorias criadas continuam
-      const avisoCategorias = categoriasPerguntar.length > 0 && (
+      const avisoCategorias = podeGerenciar && categoriasPerguntar.length > 0 && (
         <div style={{ backgroundColor: 'rgba(var(--accent-rgb), 0.08)', border: '1px solid rgba(var(--accent-rgb), 0.35)', borderRadius: '14px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <strong style={{ fontSize: '14px', color: 'var(--text-strong)' }}>Novo mês: estas categorias continuam?</strong>
           {categoriasPerguntar.map(p => (
@@ -2043,6 +2426,76 @@
                 )}
               </div>
 
+              {usuarioNuvem && (() => {
+                const detalhes = espacoAtivo && espacos.find(e => e.id === espacoAtivo.id);
+                const botaoMenor = { background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text)', borderRadius: '10px', padding: '8px 10px', fontWeight: '600', fontSize: '12px', cursor: 'pointer', flex: 1 };
+                return (
+                  <div style={{ marginTop: '14px', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <label htmlFor="seletor-gestao" style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>Gestão</label>
+                    <select id="seletor-gestao" value={espacoAtivo ? espacoAtivo.id : ''} onChange={e => { const esc = espacos.find(x => x.id === e.target.value); abrirEspaco(esc ? { id: esc.id, nome: esc.nome, papel: esc.papel } : null); setMenuAberto(false); }} style={{ ...estilos.input, padding: '8px 10px', fontSize: '13px' }}>
+                      <option value="">👤 Pessoal (só você)</option>
+                      {espacos.map(e => <option key={e.id} value={e.id}>👥 {e.nome}{e.papel === 'dono' ? '' : ' (convidado)'}</option>)}
+                    </select>
+
+                    {detalhes && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: 'var(--text)' }}>
+                        {detalhes.papel === 'dono' && detalhes.codigo && (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', backgroundColor: 'var(--surface)', border: '1px dashed var(--accent)', borderRadius: '10px', padding: '8px 10px' }}>
+                            <span>Código: <strong style={{ fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '13px', letterSpacing: '0.04em' }}>{detalhes.codigo}</strong></span>
+                            <button onClick={() => copiarCodigo(detalhes.codigo)} style={{ background: 'none', border: 'none', color: 'var(--accent-text)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', padding: 0 }}>Copiar</button>
+                          </div>
+                        )}
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Pessoas:</span>
+                          {Object.entries(detalhes.membros || {}).map(([uid, papel]) => (
+                            <div key={uid} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', marginTop: '4px' }}>
+                              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(detalhes.nomes && detalhes.nomes[uid]) || 'Pessoa'}{uid === meuUid ? ' (você)' : ''} · {papel === 'dono' ? 'dono' : 'convidado'}</span>
+                              {detalhes.papel === 'dono' && papel !== 'dono' && (
+                                <button onClick={() => tirarDaGestao(detalhes, uid, detalhes.nomes && detalhes.nomes[uid])} style={{ background: 'none', border: 'none', color: 'var(--danger-text)', fontWeight: '600', fontSize: '11px', cursor: 'pointer', padding: 0, flexShrink: 0 }}>Tirar</button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        {detalhes.papel === 'dono' ? (
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <button onClick={() => novoCodigoEspaco(detalhes)} style={botaoMenor}>Novo código</button>
+                            <button onClick={() => excluirEspaco(detalhes)} style={{ ...botaoMenor, color: 'var(--danger-text)', borderColor: 'rgba(244, 63, 94, 0.45)' }}>Excluir gestão</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => tirarDaGestao(detalhes, meuUid, null)} style={{ ...botaoMenor, color: 'var(--danger-text)', borderColor: 'rgba(244, 63, 94, 0.45)' }}>Sair desta gestão</button>
+                        )}
+                      </div>
+                    )}
+
+                    {formEspaco ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <input
+                          id="texto-gestao"
+                          type="text"
+                          autoFocus
+                          value={textoEspaco}
+                          onChange={e => setTextoEspaco(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') (formEspaco === 'criar' ? criarEspaco : entrarComCodigo)(); }}
+                          placeholder={formEspaco === 'criar' ? 'Nome, ex.: Casa' : 'Código, ex.: EDD-7KQ4MZ'}
+                          maxLength={formEspaco === 'criar' ? 40 : 12}
+                          aria-label={formEspaco === 'criar' ? 'Nome da gestão compartilhada' : 'Código de convite'}
+                          style={{ ...estilos.input, padding: '8px 10px', fontSize: '13px', textTransform: formEspaco === 'entrar' ? 'uppercase' : 'none' }}
+                        />
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button onClick={() => { setFormEspaco(null); setTextoEspaco(''); }} style={botaoMenor}>Cancelar</button>
+                          <button disabled={ocupadoEspaco} onClick={formEspaco === 'criar' ? criarEspaco : entrarComCodigo} style={{ ...botaoMenor, backgroundColor: 'var(--accent)', color: 'var(--on-accent)', border: 'none' }}>{ocupadoEspaco ? 'Aguarde…' : formEspaco === 'criar' ? 'Criar' : 'Entrar'}</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button onClick={() => { setFormEspaco('criar'); setTextoEspaco(''); }} style={botaoMenor}>+ Criar compartilhada</button>
+                        <button onClick={() => { setFormEspaco('entrar'); setTextoEspaco(''); }} style={botaoMenor}>Entrar com código</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div style={{ marginTop: '22px' }}>
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 8px 0', fontWeight: '600', textTransform: 'uppercase' }}>Aparência</p>
                 <div role="radiogroup" aria-label="Aparência do app" style={{ display: 'flex', gap: '4px', padding: '4px', borderRadius: '12px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)' }}>
@@ -2087,16 +2540,18 @@
                   <button onClick={exportarDados} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>
                     📤 Exportar backup
                   </button>
+                  {podeGerenciar && (
                   <label style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer', textAlign: 'center', display: 'block' }}>
                     📥 Importar backup
                     <input type="file" accept="application/json,.json" onChange={importarDados} style={{ display: 'none' }} />
                   </label>
+                  )}
                   <button onClick={exportarPlanilha} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>
                     📊 Exportar planilha (Excel)
                   </button>
-                  <button onClick={() => { (temExemplos ? removerExemplos : carregarExemplos)(); setMenuAberto(false); }} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px dashed var(--c-sky)', backgroundColor: 'var(--bg)', color: 'var(--c-sky)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>
+                  {!espacoAtivo && <button onClick={() => { (temExemplos ? removerExemplos : carregarExemplos)(); setMenuAberto(false); }} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px dashed var(--c-sky)', backgroundColor: 'var(--bg)', color: 'var(--c-sky)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}>
                     {temExemplos ? '🧹 Remover dados de exemplo' : '✨ Carregar dados de exemplo'}
-                  </button>
+                  </button>}
                 </div>
               </div>
             </div>
@@ -2142,10 +2597,16 @@
             </header>
 
             <div style={{ padding: isMobile ? '14px' : '32px', maxWidth: '1400px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
-              
+              {espacoAtivo && abaAtiva !== 'admin' && (
+                <div role="status" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', marginBottom: isMobile ? '14px' : '20px', padding: '10px 14px', borderRadius: '12px', backgroundColor: 'rgba(168, 85, 247, 0.12)', border: '1px solid rgba(168, 85, 247, 0.35)', fontSize: '13px', color: 'var(--text)' }}>
+                  <span>👥 Gestão compartilhada <strong>{espacoAtivo.nome}</strong>{espacoAtivo.papel === 'dono' ? ' · você é o dono' : ' · você pode lançar e ver (só o dono apaga)'}</span>
+                  <button onClick={() => abrirEspaco(null)} style={{ background: 'none', border: 'none', color: 'var(--c-purple)', fontWeight: '700', fontSize: '12px', cursor: 'pointer', padding: 0 }}>Ir para a pessoal</button>
+                </div>
+              )}
+
               {abaAtiva === 'dashboard' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
-                  {transacoes.length === 0 && metas.length === 0 && (
+                  {!espacoAtivo && transacoes.length === 0 && metas.length === 0 && (
                     <div style={{ ...estilos.card, border: '1px dashed var(--c-sky)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
                       <div style={{ minWidth: 0, flex: '1 1 260px' }}>
                         <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', display: 'flex', alignItems: 'center', gap: '8px' }}><Sparkles size={18} color="var(--c-sky)" /> Primeira vez aqui?</h3>
@@ -2154,7 +2615,7 @@
                       <button onClick={carregarExemplos} style={{ ...estilos.buttonPrimary, background: 'var(--c-sky)', boxShadow: 'none' }}><Sparkles size={16} /> Carregar exemplos</button>
                     </div>
                   )}
-                  {temExemplos && (
+                  {temExemplos && podeGerenciar && (
                     <div style={{ backgroundColor: 'rgba(14, 165, 233, 0.12)', border: '1px solid rgba(14, 165, 233, 0.35)', borderRadius: '14px', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', fontSize: '13px', color: 'var(--text)' }}>
                       <span>Você está vendo <strong>dados de exemplo</strong> (marcados como "Exemplo"). Eles servem só para mostrar como o app funciona.</span>
                       <button onClick={removerExemplos} style={{ background: 'none', border: '1px solid var(--c-sky)', color: 'var(--c-sky)', borderRadius: '8px', padding: '6px 12px', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>Remover exemplos</button>
@@ -2438,7 +2899,7 @@
                         <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
                           Recebido <strong style={{ color: 'var(--accent-text)' }}>{formatarMoeda(ganhosRecebidos)}</strong> de <strong style={{ color: 'var(--text-strong)' }}>{formatarMoeda(ganhosPrevistos)}</strong> previstos
                         </span>
-                        <button onClick={() => abrirCategoria('entrada', null)} style={botaoNovaCategoria}><Plus size={14} /> Nova categoria de ganho</button>
+                        {podeGerenciar && <button onClick={() => abrirCategoria('entrada', null)} style={botaoNovaCategoria}><Plus size={14} /> Nova categoria de ganho</button>}
                       </div>
                     </div>
 
@@ -2453,12 +2914,12 @@
                           <div key={cat} style={{ backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '8px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '700' }}>{cat}</span>
-                              <button
+                              {podeGerenciar && <button
                                 onClick={() => abrirCategoria('entrada', cat)}
                                 style={{ background: 'none', border: 'none', color: 'var(--c-sky)', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                               >
                                 {ehCategoriaCriada('entrada', cat) ? <React.Fragment><Pencil size={14} /> Editar</React.Fragment> : <React.Fragment><Sliders size={14} /> Ajustar</React.Fragment>}
-                              </button>
+                              </button>}
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                               <div>
@@ -2490,7 +2951,7 @@
                         <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0 }}>Planejamento de Saídas por Categoria</h3>
                         <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Defina e controle o teto de despesas e gastos das categorias de saída</p>
                       </div>
-                      <button onClick={() => abrirCategoria('saida', null)} style={botaoNovaCategoria}><Plus size={14} /> Nova categoria de gasto</button>
+                      {podeGerenciar && <button onClick={() => abrirCategoria('saida', null)} style={botaoNovaCategoria}><Plus size={14} /> Nova categoria de gasto</button>}
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: '20px' }}>
@@ -2510,12 +2971,12 @@
                               <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '8px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '700' }}>
                                 {cat}
                               </span>
-                              <button 
+                              {podeGerenciar && <button 
                                 onClick={() => abrirCategoria('saida', cat)}
                                 style={{ background: 'none', border: 'none', color: 'var(--c-sky)', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                               >
                                 {ehCategoriaCriada('saida', cat) ? <React.Fragment><Pencil size={14} /> Editar</React.Fragment> : <React.Fragment><Sliders size={14} /> Ajustar</React.Fragment>}
-                              </button>
+                              </button>}
                             </div>
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -2576,7 +3037,7 @@
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                               <span style={{ fontWeight: 'bold', color: renderCorTipo(r.type) }}>{r.type === 'receita' ? '+' : '-'} {formatarMoeda(r.amount)}</span>
-                              <button onClick={() => pararRecorrente(r.id)} style={{ background: 'none', border: '1px solid var(--border-strong)', borderRadius: '8px', color: 'var(--text-muted)', fontSize: '12px', fontWeight: '600', padding: '5px 10px', cursor: 'pointer' }}>Parar de repetir</button>
+                              {podeGerenciar && <button onClick={() => pararRecorrente(r.id)} style={{ background: 'none', border: '1px solid var(--border-strong)', borderRadius: '8px', color: 'var(--text-muted)', fontSize: '12px', fontWeight: '600', padding: '5px 10px', cursor: 'pointer' }}>Parar de repetir</button>}
                             </div>
                           </div>
                         ))}
@@ -2635,9 +3096,9 @@
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-strong)', margin: 0 }}>Metas e Objetivos</h3>
-                    <button onClick={() => { fecharModalMeta(); setModalMetaAberto(true); }} style={estilos.buttonPrimary}>
+                    {podeGerenciar && <button onClick={() => { fecharModalMeta(); setModalMetaAberto(true); }} style={estilos.buttonPrimary}>
                       <PlusCircle size={18} /> Nova Meta
-                    </button>
+                    </button>}
                   </div>
 
                   {metas.length > 0 && (
@@ -2707,12 +3168,12 @@
                                 <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>Objetivo: <strong style={{ color: 'var(--accent-text)' }}>{formatarMoeda(meta.objetivo)}</strong></p>
                               </div>
                               <div style={{ display: 'flex', gap: '4px' }}>
-                                <button onClick={() => abrirEdicaoMeta(meta)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Editar meta" aria-label={'Editar meta ' + meta.nome}>
+                                {podeGerenciar && <button onClick={() => abrirEdicaoMeta(meta)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Editar meta" aria-label={'Editar meta ' + meta.nome}>
                                   <Pencil size={16} />
-                                </button>
-                                <button onClick={() => excluirMeta(meta.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Excluir meta" aria-label={'Excluir meta ' + meta.nome}>
+                                </button>}
+                                {podeGerenciar && <button onClick={() => excluirMeta(meta.id)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '6px' }} title="Excluir meta" aria-label={'Excluir meta ' + meta.nome}>
                                   <Trash2 size={16} />
-                                </button>
+                                </button>}
                               </div>
                             </div>
 
@@ -2776,9 +3237,9 @@
                                   </span>
                                   <span style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
                                     <strong style={{ color: mov.valor >= 0 ? 'var(--accent-text)' : 'var(--danger-text)' }}>{mov.valor >= 0 ? '+' : '-'} {formatarMoeda(Math.abs(mov.valor))}</strong>
-                                    <button onClick={() => excluirMovimentoMeta(meta, mov)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '4px' }} title="Excluir movimentação" aria-label="Excluir movimentação">
+                                    {podeGerenciar && <button onClick={() => excluirMovimentoMeta(meta, mov)} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '4px' }} title="Excluir movimentação" aria-label="Excluir movimentação">
                                       <Trash2 size={14} />
-                                    </button>
+                                    </button>}
                                   </span>
                                 </div>
                               ))}
