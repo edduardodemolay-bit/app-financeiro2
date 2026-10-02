@@ -1,54 +1,38 @@
-COMO LIGAR O LOGIN (E-MAIL E SENHA), A NUVEM E O ADMINISTRADOR (uns 15 minutos, grátis)
+LOGIN, NUVEM E ADMINISTRADOR DO EDDFINANÇA
 
-O app já está pronto. Falta só criar o "projeto" na nossa nuvem (Firebase, do Google Cloud),
-que precisa da sua conta. O plano gratuito (Spark) aguenta milhares de pessoas usando.
+O Firebase JÁ ESTÁ LIGADO (projeto "eddfinanca", conta edduardodemolay@gmail.com, plano grátis Spark).
+Este arquivo explica como ficou configurado e como virar administrador.
 
-Como funciona depois de ligado:
- - Tela de entrada com "Já tenho conta" e "Criar conta".
- - Criar conta pede: nome completo, e-mail, idade e senha.
- - Cada conta tem o seu espaço individual: metas, lançamentos, planejamento e histórico.
+Como funciona:
+ - O app abre numa tela de entrada: "Entrar com Google", ou e-mail e senha, "Criar conta" e
+   "Esqueci a senha". Sem entrar, o app não abre.
+ - Criar conta com e-mail pede: nome completo, idade, e-mail e senha.
+ - Cada conta tem o seu espaço individual: lançamentos, metas, planejamento e histórico.
    Ex.: Carlos cria a meta "Comprar carro" e Maria a meta "Comprar casa"; um não vê a do outro.
+ - Os dados vão sozinhos para todos os aparelhos em que a pessoa entrar.
  - O Administrador vê cada conta criada (nome, e-mail, idade, data, último acesso) e pode
    bloquear ou liberar o acesso. Ele NÃO vê os lançamentos nem as metas de ninguém.
 
-1) CRIAR O PROJETO
-   - Abra https://console.firebase.google.com e entre com sua conta Google.
-   - "Criar um projeto" > nome: eddfinanca > pode desligar o Google Analytics > Criar.
-
-2) LIGAR O LOGIN POR E-MAIL E SENHA
-   - Menu "Criação" > Authentication > "Vamos começar".
-   - Aba "Método de login" > "E-mail/senha" > Ativar (a primeira chave) > Salvar.
-   - Aba "Configurações" > "Domínios autorizados" > Adicionar domínio:
-       edduardodemolay-bit.github.io
-     (e o domínio próprio, se você comprar um, ex.: eddfinanca.com.br)
-   - (Opcional) Aba "Modelos": deixe o e-mail de "Redefinição de senha" em português.
-
-3) CRIAR O BANCO (Firestore)
-   - Menu "Criação" > Firestore Database > Criar banco de dados.
-   - Local: southamerica-east1 (São Paulo) > "Iniciar no modo de produção" > Criar.
-   - Aba "Regras": apague tudo, cole o conteúdo do arquivo firestore.rules > Publicar.
-     São essas regras que garantem que cada pessoa só acessa o próprio espaço.
-
-4) PEGAR A CONFIGURAÇÃO DO APP
-   - Engrenagem (Configurações do projeto) > "Seus apps" > ícone </> (Web).
-   - Apelido: EddFinança Web > Registrar app (não precisa do Hosting).
-   - Ele mostra um bloco "const firebaseConfig = { apiKey: ..., authDomain: ..., ... }".
-   - Copie esse bloco e mande para o Claude, ou cole no index.html no lugar de:
-       const FIREBASE_CONFIG = null;
+O QUE JÁ FOI FEITO NO FIREBASE
+ - Authentication > Método de login: Google e E-mail/senha ativados.
+ - Authentication > Configurações > Domínios autorizados: edduardodemolay-bit.github.io
+ - Authentication > Modelos: idioma Português (Brasil).
+ - Firestore Database: criado em southamerica-east1 (São Paulo), modo de produção.
+ - Firestore > Regras: o conteúdo do arquivo firestore.rules.
+   (Se mudar o firestore.rules, cole de novo em Firestore > Regras > Publicar.)
+ - A configuração do app já está no index.html (const FIREBASE_CONFIG).
    (Esses valores não são senha: foram feitos para ficar no site.
-    Quem protege os dados são as regras do passo 3.)
+    Quem protege os dados são as regras do Firestore.)
 
-5) VIRAR ADMINISTRADOR
-   - Publique o app e crie a SUA conta normalmente pela tela "Criar conta".
+COMO VIRAR ADMINISTRADOR
+   - Crie a SUA conta normalmente no app.
    - No Firebase: Authentication > Users > copie o "UID do usuário" da sua conta.
-   - Firestore Database > "Iniciar coleção" > ID da coleção: admins
+   - Firestore Database > Dados > "Iniciar coleção" > ID da coleção: admins
        ID do documento: cole o seu UID
        Campo: nome (string) = seu nome > Salvar.
    - Feche e abra o app: aparece o menu "Administrador".
    - Para ter outro administrador, repita com o UID da outra pessoa.
 
-ATENÇÃO (LGPD)
-   - O app passa a guardar dados pessoais (nome, e-mail, idade) e financeiros de outras
-     pessoas. Coloque uma página de "Política de Privacidade" dizendo o que é guardado,
-     para quê, quem vê (o administrador vê só o cadastro) e como pedir para apagar a conta.
-     Ela também é exigida para publicar nas lojas.
+LGPD
+   - A página privacidade.html explica o que é guardado, para quê e quem vê.
+   - No menu do app há "Excluir minha conta e meus dados".
