@@ -94,6 +94,15 @@
   <div id="root"></div>
 
   <script>
+    // Aplica o tema antes do app carregar (evita piscar claro à noite)
+    (function () {
+      try {
+        var pref = localStorage.getItem('@finapp_modoTema') || 'auto';
+        var h = new Date().getHours();
+        var modo = pref === 'auto' ? ((h >= 18 || h < 6) ? 'escuro' : 'claro') : pref;
+        document.documentElement.setAttribute('data-tema', modo);
+      } catch (e) {}
+    })();
     if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
       window.addEventListener('load', function () {
         navigator.serviceWorker.register('./sw.js').catch(function () {});
@@ -156,27 +165,24 @@
     const LogOut = createIcon('log-out');
     const ShieldIcon = createIcon('shield-check');
 
+    // Nome completo e idade preenchidos em "Criar conta", usados ao registrar o acesso da conta nova
+    let cadastroPendente = null;
+
     // ===== CONTA GOOGLE + CÓPIA NA NUVEM (Firebase / Google Cloud) =====
     // Desligado enquanto estiver null. Para ligar, crie o projeto no Firebase e cole aqui a
     // configuração do app da Web (passo a passo em COMO-ATIVAR-LOGIN.txt).
-    const FIREBASE_CONFIG = null;
+    // Projeto "EddFinanca" no Firebase. Estes valores não são segredo: eles identificam o projeto.
+    // Quem protege os dados são as regras do Firestore (firestore.rules): cada conta só vê os próprios dados.
+    const FIREBASE_CONFIG = {
+      apiKey: "AIzaSyCPcpIwAHllAwPhB05Sss5PqTUI4v_f400",
+      authDomain: "eddfinanca.firebaseapp.com",
+      projectId: "eddfinanca",
+      storageBucket: "eddfinanca.firebasestorage.app",
+      messagingSenderId: "859974679118",
+      appId: "1:859974679118:web:6d736679be96935ece611f"
+    };
     const FIREBASE_VERSAO = '10.12.2';
     let firebasePromessa = null;
-    // Dados do cadastro que acabou de ser preenchido (nome completo e idade), usados ao criar o espaço da conta
-    let cadastroPendente = null;
-    const ERROS_LOGIN = {
-      'auth/email-already-in-use': 'Já existe uma conta com este e-mail. Use a aba "Já tenho conta".',
-      'auth/invalid-email': 'E-mail inválido. Confira se digitou certo.',
-      'auth/weak-password': 'Senha fraca. Use pelo menos 6 caracteres.',
-      'auth/user-not-found': 'E-mail ou senha incorretos.',
-      'auth/wrong-password': 'E-mail ou senha incorretos.',
-      'auth/invalid-credential': 'E-mail ou senha incorretos.',
-      'auth/invalid-login-credentials': 'E-mail ou senha incorretos.',
-      'auth/too-many-requests': 'Muitas tentativas. Espere alguns minutos e tente de novo.',
-      'auth/network-request-failed': 'Sem internet. Verifique a conexão e tente de novo.',
-      'auth/operation-not-allowed': 'O login por e-mail ainda não foi ligado no Firebase (veja COMO-ATIVAR-LOGIN.txt).'
-    };
-    const mensagemLogin = (e) => ERROS_LOGIN[e && e.code] || 'Não deu certo. Tente de novo.';
     function carregarFirebase() {
       if (firebasePromessa) return firebasePromessa;
       const script = (nome) => new Promise((ok, erro) => {
@@ -190,41 +196,62 @@
         .then(() => {
           if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
           return window.firebase;
-        });
+        })
+        // Se a internet falhar, a próxima tentativa carrega de novo em vez de repetir o erro
+        .catch((e) => { firebasePromessa = null; throw e; });
       return firebasePromessa;
     }
 
     // Leitura e gravação direta no aparelho (sem depender do estado da tela)
-    // Cada conta Google tem a sua própria "gaveta" no aparelho (chaves terminadas em "@id-da-conta").
-    // Sem conta, usa as chaves de sempre. Assim duas pessoas no mesmo celular nunca veem nem
-    // misturam os dados uma da outra.
     const CHAVES_LOCAIS = { transacoes: '@finapp_transacoes', limitesCategorias: '@finapp_limitesCategorias', metas: '@finapp_metas', recorrentes: '@finapp_recorrentes', categoriasExtras: '@finapp_categorias', historico: '@finapp_historico' };
-    let contaAtiva = (() => { try { return localStorage.getItem('@finapp_conta') || ''; } catch (e) { return ''; } })();
-    const chaveDaConta = (chave, conta) => (conta ? chave + '@' + conta : chave);
-    function trocarContaAtiva(conta) {
-      contaAtiva = conta || '';
-      try { if (contaAtiva) localStorage.setItem('@finapp_conta', contaAtiva); else localStorage.removeItem('@finapp_conta'); } catch (e) {}
-    }
-    function lerLocal(conta = contaAtiva) {
+    function lerLocal() {
       const d = {};
       Object.entries(CHAVES_LOCAIS).forEach(([campo, chave]) => {
-        try { const v = localStorage.getItem(chaveDaConta(chave, conta)); if (v) d[campo] = JSON.parse(v); } catch (e) {}
+        try { const v = localStorage.getItem(chave); if (v) d[campo] = JSON.parse(v); } catch (e) {}
       });
-      try { d.atualizadoEm = localStorage.getItem(chaveDaConta('@finapp_atualizado', conta)) || ''; } catch (e) {}
       return d;
     }
-    function gravarLocal(d, conta = contaAtiva) {
+    function gravarLocal(d) {
       Object.entries(CHAVES_LOCAIS).forEach(([campo, chave]) => {
-        if (d[campo] !== undefined) localStorage.setItem(chaveDaConta(chave, conta), JSON.stringify(d[campo]));
+        if (d[campo] !== undefined) localStorage.setItem(chave, JSON.stringify(d[campo]));
       });
-      localStorage.setItem(chaveDaConta('@finapp_atualizado', conta), d.atualizadoEm || new Date().toISOString());
     }
-    function apagarLocal(conta) {
-      Object.values(CHAVES_LOCAIS).forEach(chave => { try { localStorage.removeItem(chaveDaConta(chave, conta)); } catch (e) {} });
-      try { localStorage.removeItem(chaveDaConta('@finapp_atualizado', conta)); } catch (e) {}
+
+    // ===== SINCRONIZAÇÃO COM A NUVEM =====
+    // Cada salvamento no aparelho ganha uma "versão" nova. A nuvem guarda a versão que recebeu e
+    // o aparelho lembra a última versão que combinou com a nuvem (a "base"). Comparando as três,
+    // o app sabe sozinho quem mudou, sem depender do relógio de cada aparelho.
+    const CHAVE_VERSAO_LOCAL = '@finapp_versaoLocal';
+    const CHAVE_BASE_NUVEM = '@finapp_nuvemBase';
+    const CHAVE_UID_NUVEM = '@finapp_uidNuvem';
+    const lerChave = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+    const gravarChave = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} };
+    const novaVersao = () => Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+    const temDados = (d) => !!d && ((d.transacoes || []).length > 0 || (d.metas || []).length > 0 || (d.recorrentes || []).length > 0);
+
+    // 'enviar' | 'baixar' | 'conflito' | 'nada'
+    function decidirSync(versaoLocal, base, versaoNuvem, temLocal, temNuvem) {
+      if (!temNuvem && !versaoNuvem) return temLocal ? 'enviar' : 'nada'; // conta ainda vazia
+      if (!base) return temLocal ? 'conflito' : 'baixar';                  // primeira vez neste aparelho
+      const localMudou = versaoLocal !== base;
+      const nuvemMudou = versaoNuvem !== base;
+      if (!localMudou && !nuvemMudou) return 'nada';
+      if (!nuvemMudou) return 'enviar';                                    // só o aparelho mudou (inclusive se apagou tudo)
+      if (!localMudou) return 'baixar';                                    // só a nuvem mudou
+      return 'conflito';                                                   // os dois mudaram
     }
-    const LIMITES_PADRAO = { 'Salário': 0, 'Vendas': 0, 'Alimentação': 800, 'Transporte': 300, 'Moradia': 1200, 'Lazer': 400, 'Saúde': 200, 'Educação': 300, 'Outros': 200 };
-    const temDados = (d) => !!d && ((d.transacoes || []).length > 0 || (d.metas || []).length > 0);
+
+    // Baixa um arquivo de backup (usado antes de descartar um dos lados num conflito)
+    function baixarBackup(dados, nome) {
+      try {
+        const blob = new Blob([JSON.stringify({ versao: 4, exportadoEm: new Date().toISOString(), ...dados }, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = nome;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) {}
+    }
 
     // ===== LANÇAMENTO RÁPIDO: entende frases como "gastei 46 na padaria" ou "recebi 3500 de salário" =====
     const semAcento = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -411,7 +438,8 @@
     // Cada conta fixa guarda os meses já gerados, então apagar um lançamento gerado não o recria.
     function gerarLancamentosFixos(recorrentes, transacoes, mesAtual) {
       const novas = [];
-      let base = Date.now();
+      // Os ids começam depois do maior id já usado, para nunca repetir o de um lançamento criado no mesmo instante
+      let base = transacoes.reduce((mx, t) => (typeof t.id === 'number' && t.id >= mx ? t.id + 1 : mx), Date.now());
       const atualizadas = recorrentes.map(r => {
         if (!r.ativo) return r;
         const gerados = new Set(r.gerados || []);
@@ -438,6 +466,28 @@
       };
     }
 
+    // Confere cada lançamento: conserta campos faltando e separa os que não têm data ou valor válidos
+    function limparTransacoes(lista) {
+      const validas = [], descartadas = [];
+      (Array.isArray(lista) ? lista : []).forEach(t => {
+        if (!t || typeof t !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(t.date)) || !isFinite(Number(t.amount)) || t.amount === '' || t.amount == null) { descartadas.push(t); return; }
+        validas.push({ ...t, description: String(t.description == null ? '' : t.description), amount: Number(t.amount), category: String(t.category || 'Outros'), type: ['receita', 'despesa', 'gasto'].includes(t.type) ? t.type : 'gasto' });
+      });
+      return { validas, descartadas };
+    }
+
+    const LIMITES_PADRAO = {
+      'Salário': 0,
+      'Vendas': 0,
+      'Alimentação': 800,
+      'Transporte': 300,
+      'Moradia': 1200,
+      'Lazer': 400,
+      'Saúde': 200,
+      'Educação': 300,
+      'Outros': 200
+    };
+
     function App() {
       const [transacoes, setTransacoes] = useState([]);
       
@@ -462,9 +512,21 @@
       const [corTema, setCorTema] = useState(() => {
         try { return localStorage.getItem('@finapp_cor') || 'verde'; } catch (e) { return 'verde'; }
       });
-      const [modoTema, setModoTema] = useState(() => {
-        try { return localStorage.getItem('@finapp_modo') || 'claro'; } catch (e) { return 'claro'; }
+      // Tema: 'auto' (escuro das 18h às 6h), 'claro' ou 'escuro' (escolha fixa da pessoa).
+      // Chave nova para que todos comecem no automático, mesmo quem já tinha escolhido antes.
+      const [preferenciaTema, setPreferenciaTema] = useState(() => {
+        try { return localStorage.getItem('@finapp_modoTema') || 'auto'; } catch (e) { return 'auto'; }
       });
+      const ehNoite = () => { const h = new Date().getHours(); return h >= 18 || h < 6; };
+      const [noite, setNoite] = useState(ehNoite);
+      // Confere a hora a cada minuto e ao voltar para o app, para trocar sozinho às 18h e às 6h
+      useEffect(() => {
+        const conferir = () => setNoite(ehNoite());
+        const timer = setInterval(conferir, 60000);
+        document.addEventListener('visibilitychange', conferir);
+        return () => { clearInterval(timer); document.removeEventListener('visibilitychange', conferir); };
+      }, []);
+      const modoTema = preferenciaTema === 'auto' ? (noite ? 'escuro' : 'claro') : preferenciaTema;
       useEffect(() => {
         const t = TEMAS[corTema] || TEMAS.verde;
         const root = document.documentElement;
@@ -474,11 +536,14 @@
         root.style.setProperty('--accent-dark', t.dark);
         root.style.setProperty('--accent-rgb', t.rgb);
         root.style.setProperty('--accent-text', modoTema === 'escuro' ? t.light : t.dark);
+        // Barra do celular acompanha o tema
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', modoTema === 'escuro' ? '#0e1525' : t.hex);
         try {
           localStorage.setItem('@finapp_cor', corTema);
-          localStorage.setItem('@finapp_modo', modoTema);
+          localStorage.setItem('@finapp_modoTema', preferenciaTema);
         } catch (e) {}
-      }, [corTema, modoTema]);
+      }, [corTema, modoTema, preferenciaTema]);
       const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
       const [menuAberto, setMenuAberto] = useState(false);
       useEffect(() => {
@@ -547,6 +612,8 @@
       // Conta Google (só aparece quando FIREBASE_CONFIG estiver preenchido)
       const [usuarioNuvem, setUsuarioNuvem] = useState(null);
       const [statusNuvem, setStatusNuvem] = useState(FIREBASE_CONFIG ? 'saiu' : 'desligado');
+      // 'livre' (login desligado) | 'carregando' | 'fora' (mostra a tela de entrada) | 'dentro' | 'offline' | 'sem-internet'
+      const [estadoLogin, setEstadoLogin] = useState(FIREBASE_CONFIG ? 'carregando' : 'livre');
       const nuvemRef = useRef(null);
       const timerNuvem = useRef(null);
       const nomeAutor = (usuarioNuvem && usuarioNuvem.nome) || nomeUsuario.trim() || 'Você';
@@ -579,13 +646,68 @@
           }
 
           try {
-            // Metas zeradas a pedido do usuário (uma única vez): remove as metas salvas neste aparelho (só sem conta).
-            if (!contaAtiva && !localStorage.getItem('@finapp_metas_zeradas')) {
+            // Metas zeradas a pedido do usuário (uma única vez): remove as metas salvas neste aparelho.
+            if (!localStorage.getItem('@finapp_metas_zeradas')) {
               localStorage.setItem('@finapp_metas', '[]');
               localStorage.setItem('@finapp_metas_zeradas', '1');
             }
-            // Abre a "gaveta" da conta que estava ativa neste aparelho (ou a sem conta)
-            carregarDaGaveta(lerLocal());
+          } catch (e) {}
+
+          // Lê cada item separado: se um estiver estragado, os outros abrem normalmente
+          // e o conteúdo estragado é guardado à parte (nada é apagado sem cópia).
+          const problemas = [];
+          const lerItem = (chave, padrao, validar) => {
+            let bruto = null;
+            try { bruto = localStorage.getItem(chave); } catch (e) { return padrao; }
+            if (bruto == null) return padrao;
+            try {
+              const valor = JSON.parse(bruto);
+              if (validar && !validar(valor)) throw new Error('formato');
+              return valor;
+            } catch (e) {
+              try { localStorage.setItem('@finapp_copia_estragada:' + chave + ':' + Date.now(), bruto); } catch (e2) {}
+              problemas.push(chave);
+              return padrao;
+            }
+          };
+          const ehLista = (v) => Array.isArray(v);
+          const ehObjeto = (v) => v && typeof v === 'object' && !Array.isArray(v);
+
+          // Lançamentos com algum campo faltando são consertados; os sem valor ou data válidos ficam de fora (com cópia)
+          const { validas: listaTransacoes, descartadas } = limparTransacoes(lerItem('@finapp_transacoes', [], ehLista));
+          if (descartadas.length) {
+            try { localStorage.setItem('@finapp_copia_estragada:lancamentos:' + Date.now(), JSON.stringify(descartadas)); } catch (e) {}
+            problemas.push(descartadas.length + ' lançamento(s) sem data ou valor');
+          }
+          setTransacoes(listaTransacoes);
+
+          const limites = lerItem('@finapp_limitesCategorias', null, ehObjeto);
+          if (limites) setLimitesCategorias(prev => ({ ...prev, ...limites }));
+          const extras = lerItem('@finapp_categorias', null, ehObjeto);
+          if (extras) setCategoriasExtras(normalizarExtras(extras));
+          setHistorico(lerItem('@finapp_historico', [], ehLista).filter(h => h && typeof h.quando === 'string'));
+          const listaMetas = lerItem('@finapp_metas', [], ehLista).filter(m => m && typeof m === 'object').map(normalizarMeta);
+          setMetas(listaMetas);
+          const listaRecorrentes = lerItem('@finapp_recorrentes', [], ehLista).filter(r => r && typeof r === 'object' && /^\d{4}-\d{2}$/.test(String(r.inicio)));
+          setRecorrentes(listaRecorrentes);
+
+          if (problemas.length) {
+            setTimeout(() => exibirNotificacao('⚠️ Alguns dados salvos estavam estragados e foram guardados à parte. O resto abriu normalmente.'), 500);
+          }
+
+          try {
+
+            // Lança as contas fixas dos meses que passaram desde a última abertura
+            const gerado = gerarLancamentosFixos(listaRecorrentes, listaTransacoes, mesDe(hojeISO()));
+            if (gerado) {
+              const metasAtualizadas = gerado.novas.reduce((acc, t) => sincronizarMeta(acc, t), listaMetas);
+              setTransacoes(gerado.transacoes);
+              setRecorrentes(gerado.recorrentes);
+              setMetas(metasAtualizadas);
+              localStorage.setItem('@finapp_transacoes', JSON.stringify(gerado.transacoes));
+              localStorage.setItem('@finapp_recorrentes', JSON.stringify(gerado.recorrentes));
+              localStorage.setItem('@finapp_metas', JSON.stringify(metasAtualizadas));
+            }
           } catch (e) {}
         }
 
@@ -615,6 +737,8 @@
 
         try {
           gravarLocal(payload);
+          // Marca que este aparelho mudou: a nuvem vai receber esta versão
+          gravarChave(CHAVE_VERSAO_LOCAL, novaVersao());
           setSalvoEm(new Date());
         } catch (e) {
           exibirNotificacao('❌ Não foi possível salvar neste aparelho. Exporte um backup.');
@@ -623,164 +747,269 @@
         if (window.electronAPI) {
           window.electronAPI.saveData(payload).catch((e) => console.error("Erro ao salvar no Electron:", e));
         }
-        enviarParaNuvem(payload);
+        enviarParaNuvem();
       };
 
-      // Guarda uma cópia na nuvem (Firestore), 1,5 s depois da última mudança
-      // Só grava no documento da conta que está aberta neste aparelho (nunca no de outra pessoa)
-      const pendenteNuvem = useRef(null);
-      const gravarNaNuvem = () => {
-        const p = pendenteNuvem.current;
-        pendenteNuvem.current = null;
-        clearTimeout(timerNuvem.current);
-        if (!p) return Promise.resolve();
-        const { atualizadoEm, ...dados } = p.payload;
-        return p.sessao.doc.set({
-          nome: p.sessao.nome, email: p.sessao.email,
-          atualizadoEm: new Date().toISOString(),
-          dados: JSON.stringify(dados)
-        }, { merge: true })
-          .then(() => setStatusNuvem('sincronizado'))
-          .catch(() => setStatusNuvem('erro'));
-      };
-      const enviarParaNuvem = (payload) => {
-        const sessao = nuvemRef.current;
-        if (!sessao || sessao.uid !== contaAtiva) return;
-        pendenteNuvem.current = { sessao, payload };
+      // Sincroniza com a nuvem 1,5 s depois da última mudança
+      const enviarParaNuvem = () => {
+        if (!nuvemRef.current) return;
         clearTimeout(timerNuvem.current);
         setStatusNuvem('salvando');
-        timerNuvem.current = setTimeout(gravarNaNuvem, 1500);
+        timerNuvem.current = setTimeout(() => { timerNuvem.current = null; sincronizar(); }, 1500);
       };
 
       // Coloca no app os dados que vieram da nuvem ou de um backup
       const aplicarDados = (d) => {
-        const lista = Array.isArray(d.transacoes) ? d.transacoes : [];
+        const lista = limparTransacoes(d.transacoes).validas;
         const novasMetas = Array.isArray(d.metas) ? d.metas.map(normalizarMeta) : [];
         const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes : [];
         const novasExtras = normalizarExtras(d.categoriasExtras);
-        // Começa dos limites padrão: nada do planejamento de outra conta fica na tela
         const novosLimites = { ...LIMITES_PADRAO, ...(d.limitesCategorias || {}) };
         const novoHistorico = Array.isArray(d.historico) ? d.historico : [];
         setTransacoes(lista); setMetas(novasMetas); setRecorrentes(novosRecorrentes);
         setCategoriasExtras(novasExtras); setLimitesCategorias(novosLimites); setHistorico(novoHistorico);
-        return { transacoes: lista, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, limitesCategorias: novosLimites, historico: novoHistorico, atualizadoEm: d.atualizadoEm };
+        return { transacoes: lista, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, limitesCategorias: novosLimites, historico: novoHistorico };
       };
 
-      // Mostra os dados de uma "gaveta" e lança as contas fixas dos meses que passaram
-      function carregarDaGaveta(d) {
-        const aplicados = aplicarDados(d || {});
-        const gerado = gerarLancamentosFixos(aplicados.recorrentes, aplicados.transacoes, mesDe(hojeISO()));
-        if (gerado) {
-          const metasAtualizadas = gerado.novas.reduce((acc, t) => sincronizarMeta(acc, t), aplicados.metas);
-          setTransacoes(gerado.transacoes);
-          setRecorrentes(gerado.recorrentes);
-          setMetas(metasAtualizadas);
-          const final = { ...aplicados, transacoes: gerado.transacoes, recorrentes: gerado.recorrentes, metas: metasAtualizadas, atualizadoEm: undefined };
-          gravarLocal(final);
-          return final;
-        }
-        return aplicados;
-      }
+      // Compara aparelho e nuvem e faz o que for preciso: enviar, baixar ou (só se os dois mudaram) perguntar.
+      // Lê tudo direto do aparelho, então funciona mesmo chamada de dentro de eventos antigos.
+      const sincronizandoRef = useRef(false);
+      const repetirSyncRef = useRef(false);
+      const sincronizar = async () => {
+        const sessao = nuvemRef.current;
+        if (!sessao) return 'sem-conta';
+        if (sincronizandoRef.current) { repetirSyncRef.current = true; return 'ocupado'; }
+        sincronizandoRef.current = true;
+        setStatusNuvem('salvando');
+        let resultado = 'erro';
+        try {
+          for (let tentativa = 0; tentativa < 3; tentativa++) {
+            const snap = await sessao.doc.get();
+            const dadosNuvem = snap.exists && snap.data().dados ? JSON.parse(snap.data().dados) : null;
+            const versaoNuvem = snap.exists ? (snap.data().versao || null) : null;
+            const local = lerLocal();
+            let versaoLocal = lerChave(CHAVE_VERSAO_LOCAL);
+            const base = lerChave(CHAVE_BASE_NUVEM);
+            let acao = decidirSync(versaoLocal, base, versaoNuvem, temDados(local), temDados(dadosNuvem));
 
-      // Liga o login do Google quando o Firebase estiver configurado
+            if (acao === 'conflito') {
+              const ficarNuvem = window.confirm('Este aparelho e a sua conta têm mudanças diferentes desde a última sincronização.\n\n'
+                + 'OK = ficar com os dados da conta (' + (((dadosNuvem || {}).transacoes || []).length) + ' lançamentos)\n'
+                + 'Cancelar = ficar com os dados deste aparelho (' + ((local.transacoes || []).length) + ' lançamentos)\n\n'
+                + 'O lado que não for escolhido é salvo num arquivo de backup antes, para nada se perder.');
+              if (ficarNuvem) { baixarBackup(local, 'backup-deste-aparelho-' + hojeISO() + '.json'); acao = 'baixar'; }
+              else { baixarBackup(dadosNuvem || {}, 'backup-da-conta-' + hojeISO() + '.json'); acao = 'enviar'; }
+            }
+
+            if (acao === 'baixar') {
+              gravarLocal(aplicarDados(dadosNuvem || {}));
+              gravarChave(CHAVE_VERSAO_LOCAL, versaoNuvem);
+              gravarChave(CHAVE_BASE_NUVEM, versaoNuvem);
+              exibirNotificacao('Dados atualizados com a sua conta');
+              resultado = 'baixou';
+              break;
+            }
+            if (acao === 'enviar') {
+              if (!versaoLocal) { versaoLocal = novaVersao(); gravarChave(CHAVE_VERSAO_LOCAL, versaoLocal); }
+              // Só grava se a nuvem ainda estiver na versão que acabamos de ler; se outro aparelho
+              // enviou nesse meio-tempo, a gravação é recusada e o app compara de novo.
+              const doc = sessao.doc;
+              // O documento da nuvem aceita até 1 MB. Se estiver perto disso, a cópia leva só o histórico recente.
+              let textoDados = JSON.stringify(local);
+              if (textoDados.length > 900000) textoDados = JSON.stringify({ ...local, historico: (local.historico || []).slice(0, 50) });
+              if (textoDados.length > 1000000) {
+                setStatusNuvem('cheio');
+                exibirNotificacao('⚠️ Seus dados ficaram grandes demais para a cópia na nuvem. Exporte um backup no menu.');
+                resultado = 'cheio';
+                break;
+              }
+              const mudouNoMeio = await sessao.fb.firestore().runTransaction(async (tx) => {
+                const atual = await tx.get(doc);
+                const versaoAgora = atual.exists ? (atual.data().versao || null) : null;
+                if (versaoAgora !== versaoNuvem) return true;
+                tx.set(doc, { nome: sessao.nome, email: sessao.email, atualizadoEm: new Date().toISOString(), versao: versaoLocal, dados: textoDados }, { merge: true });
+                return false;
+              });
+              if (mudouNoMeio) continue;
+              gravarChave(CHAVE_BASE_NUVEM, versaoLocal);
+              resultado = 'enviou';
+              break;
+            }
+            // nada a fazer: os dois lados já estão iguais
+            if (versaoLocal === versaoNuvem) gravarChave(CHAVE_BASE_NUVEM, versaoNuvem);
+            resultado = 'em-dia';
+            break;
+          }
+          setStatusNuvem(resultado === 'erro' ? 'erro' : resultado === 'cheio' ? 'cheio' : 'sincronizado');
+        } catch (e) {
+          console.error('Erro ao sincronizar:', e);
+          setStatusNuvem('erro');
+        } finally {
+          sincronizandoRef.current = false;
+          if (repetirSyncRef.current) { repetirSyncRef.current = false; setTimeout(sincronizar, 300); }
+        }
+        return resultado;
+      };
+
+      // Apaga deste aparelho os dados da conta (ao sair ou ao trocar de conta)
+      const limparAparelho = () => {
+        Object.values(CHAVES_LOCAIS).forEach(k => gravarChave(k, null));
+        [CHAVE_VERSAO_LOCAL, CHAVE_BASE_NUVEM, CHAVE_UID_NUVEM].forEach(k => gravarChave(k, null));
+        aplicarDados({});
+      };
+
+      // Ao voltar para o app (trocou de aba ou desbloqueou o celular), busca o que mudou na nuvem
+      useEffect(() => {
+        const aoVoltar = () => { if (document.visibilityState === 'visible' && nuvemRef.current && !timerNuvem.current) sincronizar(); };
+        // Também tenta quando a internet volta e, com o app aberto na tela, a cada 2 minutos
+        const aoReconectar = () => { if (nuvemRef.current && !timerNuvem.current) sincronizar(); };
+        const periodico = setInterval(() => { if (document.visibilityState === 'visible' && navigator.onLine !== false) aoReconectar(); }, 120000);
+        document.addEventListener('visibilitychange', aoVoltar);
+        window.addEventListener('online', aoReconectar);
+        return () => { document.removeEventListener('visibilitychange', aoVoltar); window.removeEventListener('online', aoReconectar); clearInterval(periodico); };
+      }, []);
+
+      // Liga o login quando o Firebase estiver configurado (com ele ligado, o app só abre depois de entrar)
       useEffect(() => {
         if (!FIREBASE_CONFIG) return;
         let cancelado = false;
         carregarFirebase().then(fb => {
           if (cancelado) return;
+          fb.auth().languageCode = 'pt-BR';
           fb.auth().getRedirectResult().catch(() => {});
           fb.auth().onAuthStateChanged(async (user) => {
-            if (!user) {
-              nuvemRef.current = null; setUsuarioNuvem(null); setStatusNuvem('saiu'); setEhAdmin(false); setAcessos(null);
-              setAbaAtiva(a => (a === 'admin' ? 'dashboard' : a));
-              // Saiu (ou a sessão acabou): fecha a gaveta da conta e volta para a "sem conta"
-              if (contaAtiva) { trocarContaAtiva(''); carregarDaGaveta(lerLocal('')); }
-              return;
-            }
+            if (!user) { nuvemRef.current = null; setUsuarioNuvem(null); setStatusNuvem('saiu'); setEhAdmin(false); setAcessos(null); setEstadoLogin('fora'); return; }
+            const db = fb.firestore();
+            const perfil = { uid: user.uid, nome: user.displayName || user.email, email: user.email, foto: user.photoURL };
             setStatusNuvem('conectando');
-            // Cada pessoa tem só o seu espaço: usuarios/{id da conta}
-            const doc = fb.firestore().collection('usuarios').doc(user.uid);
+
+            // Registro de acesso (o que o administrador vê: cadastro e datas, nunca dados financeiros).
+            // Se o administrador bloqueou a conta, ela não abre.
             try {
-              // 1º: o registro de acesso (o que o administrador vê, sem nenhum dado financeiro).
-              // Se o administrador bloqueou esta conta, não abre nada dela.
-              const db = fb.firestore();
               const acessoDoc = db.collection('acessos').doc(user.uid);
               const acessoSnap = await acessoDoc.get();
               const acesso = acessoSnap.exists ? acessoSnap.data() : null;
               if (acesso && acesso.bloqueado) {
                 cadastroPendente = null;
-                setErroLogin('O acesso desta conta foi bloqueado pelo administrador. Fale com o responsável pelo app.');
-                setUsuarioNuvem(null);
-                setStatusNuvem('saiu');
+                setAvisoLogin('O acesso desta conta foi bloqueado pelo administrador. Fale com o responsável pelo app.');
+                nuvemRef.current = null;
                 await fb.auth().signOut();
                 return;
               }
-
-              const snap = await doc.get();
-              const registro = snap.exists ? snap.data() : null;
-              const daNuvem = registro && registro.dados ? { ...JSON.parse(registro.dados), atualizadoEm: registro.atualizadoEm || '' } : null;
-              // Cadastro recém-preenchido nesta tela (nome completo e idade)
-              const novoCadastro = cadastroPendente && cadastroPendente.email === String(user.email || '').toLowerCase() ? cadastroPendente : null;
+              const novo = cadastroPendente && cadastroPendente.email === String(user.email || '').toLowerCase() ? cadastroPendente : null;
               cadastroPendente = null;
-              const nomeCompleto = (registro && registro.nomeCompleto) || (acesso && acesso.nomeCompleto) || (novoCadastro && novoCadastro.nome) || user.displayName || user.email;
-              const perfil = { uid: user.uid, nome: nomeCompleto, email: user.email, foto: user.photoURL || null, idade: (registro && registro.idade) || (acesso && acesso.idade) || (novoCadastro && novoCadastro.idade) || null };
+              perfil.nome = (acesso && acesso.nomeCompleto) || (novo && novo.nome) || perfil.nome;
               const agoraAcesso = new Date().toISOString();
               await acessoDoc.set(acesso
                 ? { ultimoAcesso: agoraAcesso, totalAcessos: (Number(acesso.totalAcessos) || 0) + 1 }
-                : { nomeCompleto: perfil.nome, email: perfil.email, ...(perfil.idade ? { idade: perfil.idade } : {}), criadoEm: agoraAcesso, ultimoAcesso: agoraAcesso, totalAcessos: 1, bloqueado: false }, { merge: true });
+                : { nomeCompleto: perfil.nome, email: user.email, ...(novo && novo.idade ? { idade: novo.idade } : {}), criadoEm: agoraAcesso, ultimoAcesso: agoraAcesso, totalAcessos: 1, bloqueado: false }, { merge: true });
               const adminSnap = await db.collection('admins').doc(user.uid).get().catch(() => null);
               setEhAdmin(!!(adminSnap && adminSnap.exists));
-              setUsuarioNuvem(perfil);
-
-              // Abre a gaveta desta conta no aparelho (a de outra pessoa nunca é lida aqui)
-              trocarContaAtiva(user.uid);
-              nuvemRef.current = { doc, uid: user.uid, nome: perfil.nome, email: perfil.email };
-              const agora = new Date().toISOString();
-              // Primeira vez: cria o espaço desta pessoa com o cadastro. Depois: só atualiza o último acesso.
-              await doc.set(snap.exists
-                ? { ultimoAcesso: agora }
-                : { nomeCompleto: perfil.nome, email: perfil.email, ...(perfil.idade ? { idade: perfil.idade } : {}), criadoEm: agora, ultimoAcesso: agora }, { merge: true });
-
-              const daGaveta = lerLocal(user.uid);
-              // Usa a versão mais recente entre a nuvem e este aparelho
-              if (temDados(daNuvem) && (!temDados(daGaveta) || (daNuvem.atualizadoEm || '') >= (daGaveta.atualizadoEm || ''))) {
-                gravarLocal(daNuvem, user.uid);
-                carregarDaGaveta(daNuvem);
-                setStatusNuvem('sincronizado');
-                if (!snap.exists || !temDados(daGaveta)) exibirNotificacao('Bem-vindo(a), ' + perfil.nome + '! Seus dados foram carregados.');
-                return;
-              }
-              if (temDados(daGaveta)) { enviarParaNuvem(carregarDaGaveta(daGaveta)); return; }
-
-              // Conta sem nada ainda: oferece levar os lançamentos feitos SEM conta neste aparelho
-              const semConta = lerLocal('');
-              if (temDados(semConta) && window.confirm('Este aparelho tem ' + (semConta.transacoes || []).length + ' lançamentos feitos sem conta. Levar para a sua conta (' + perfil.email + ')?\n\nOK = levar para a sua conta\nCancelar = começar a conta vazia')) {
-                const movidos = { ...semConta, atualizadoEm: undefined };
-                gravarLocal(movidos, user.uid);
-                apagarLocal('');   // saem do modo sem conta: quem usar o aparelho depois não vê
-                enviarParaNuvem(carregarDaGaveta(movidos));
-                exibirNotificacao('Lançamentos levados para a sua conta');
-                return;
-              }
-              carregarDaGaveta({});
-              setStatusNuvem('sincronizado');
-              exibirNotificacao('Conta criada! Bem-vindo(a), ' + perfil.nome + '.');
             } catch (e) {
-              setStatusNuvem('erro');
+              // Sem internet: segue com os dados do aparelho; o registro de acesso fica para a próxima vez
+              console.error('Registro de acesso:', e);
             }
+            setAvisoLogin('');
+            setUsuarioNuvem(perfil);
+            const doc = db.collection('usuarios').doc(user.uid);
+            // Os dados deste aparelho são de outra conta? Não mistura: apaga daqui e usa os desta conta.
+            const uidAnterior = lerChave(CHAVE_UID_NUVEM);
+            if (uidAnterior && uidAnterior !== user.uid && temDados(lerLocal())) {
+              const trocar = window.confirm('Este aparelho tem dados de outra conta.\n\nOK = apagar esses dados daqui (eles continuam na outra conta) e carregar os da conta ' + (user.email || '') + '\nCancelar = não entrar agora');
+              if (!trocar) { nuvemRef.current = null; await fb.auth().signOut(); return; }
+              limparAparelho();
+            }
+            gravarChave(CHAVE_UID_NUVEM, user.uid);
+            nuvemRef.current = { fb, doc, nome: perfil.nome, email: perfil.email };
+            setEstadoLogin('dentro');
+            await sincronizar();
           });
-        }).catch(() => setStatusNuvem('erro'));
+        }).catch(() => {
+          // Sem internet para carregar o login: quem já entrou neste aparelho usa os dados daqui
+          setStatusNuvem('erro');
+          setEstadoLogin(lerChave(CHAVE_UID_NUVEM) ? 'offline' : 'sem-internet');
+        });
         return () => { cancelado = true; };
       }, []);
 
+      // Mensagens de erro do login em português
+      const traduzirErroLogin = (e) => ({
+        'auth/invalid-email': 'Esse e-mail não parece certo. Confira se digitou tudo.',
+        'auth/missing-email': 'Digite o seu e-mail.',
+        'auth/missing-password': 'Digite a sua senha.',
+        'auth/user-not-found': 'Não achamos conta com esse e-mail. Toque em "Criar conta".',
+        'auth/wrong-password': 'Senha errada. Tente de novo ou toque em "Esqueci a senha".',
+        'auth/invalid-credential': 'E-mail ou senha errados. Tente de novo ou toque em "Esqueci a senha".',
+        'auth/invalid-login-credentials': 'E-mail ou senha errados. Tente de novo ou toque em "Esqueci a senha".',
+        'auth/email-already-in-use': 'Já existe conta com esse e-mail. Toque em "Entrar".',
+        'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
+        'auth/too-many-requests': 'Muitas tentativas seguidas. Espere alguns minutos e tente de novo.',
+        'auth/network-request-failed': 'Sem internet. Conecte-se e tente de novo.',
+        'auth/popup-closed-by-user': 'A janela do Google foi fechada antes de terminar.',
+        'auth/cancelled-popup-request': 'A janela do Google foi fechada antes de terminar.',
+        'auth/account-exists-with-different-credential': 'Esse e-mail já entra de outro jeito (Google ou senha). Use a forma que você usou da primeira vez.',
+        'auth/operation-not-allowed': 'Essa forma de entrar ainda não foi ligada no Firebase.'
+      }[e && e.code] || 'Não foi possível entrar. Tente de novo.');
+
+      const entrarComGoogle = async () => {
+        const fb = await carregarFirebase();
+        const provedor = new fb.auth.GoogleAuthProvider();
+        provedor.setCustomParameters({ prompt: 'select_account' });
+        const instalado = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+        if (instalado) { await fb.auth().signInWithRedirect(provedor); return; }
+        try { await fb.auth().signInWithPopup(provedor); }
+        catch (e) { if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) await fb.auth().signInWithRedirect(provedor); else throw e; }
+      };
+
+      const entrarComEmail = async (email, senha) => {
+        const fb = await carregarFirebase();
+        await fb.auth().signInWithEmailAndPassword(email.trim(), senha);
+      };
+
+      const criarContaEmail = async (nome, email, senha, idade) => {
+        const fb = await carregarFirebase();
+        const nomeLimpo = nome.trim();
+        // Guarda o cadastro antes de criar a conta: o registro de acesso é feito logo que ela entra
+        cadastroPendente = { email: email.trim().toLowerCase(), nome: nomeLimpo, idade };
+        let cred;
+        try { cred = await fb.auth().createUserWithEmailAndPassword(email.trim(), senha); }
+        catch (e) { cadastroPendente = null; throw e; }
+        if (nomeLimpo && cred.user) {
+          await cred.user.updateProfile({ displayName: nomeLimpo });
+          setUsuarioNuvem(u => (u ? { ...u, nome: nomeLimpo } : u));
+          if (nuvemRef.current) nuvemRef.current.nome = nomeLimpo;
+        }
+      };
+
+      const esqueciSenha = async (email) => {
+        const fb = await carregarFirebase();
+        fb.auth().languageCode = 'pt-BR';
+        await fb.auth().sendPasswordResetEmail(email.trim());
+      };
+
+      // Sair: primeiro garante que tudo foi para a nuvem, depois apaga os dados deste aparelho
+      // (assim quem usar o aparelho depois não vê nem leva os seus dados)
+      const sairDaConta = async () => {
+        if (!window.confirm('Sair da conta?\n\nSeus dados ficam guardados na sua conta e são apagados deste aparelho. Para vê-los de novo, é só entrar outra vez.')) return;
+        clearTimeout(timerNuvem.current); timerNuvem.current = null;
+        let r = await sincronizar();
+        if (r === 'ocupado') { await new Promise(ok => setTimeout(ok, 1500)); r = await sincronizar(); }
+        if ((r === 'erro' || r === 'ocupado') && !window.confirm('Não foi possível enviar as últimas mudanças para a sua conta (sem internet?).\n\nSe sair agora, o que não foi enviado se perde. Sair mesmo assim?')) return;
+        nuvemRef.current = null;
+        try { const fb = await carregarFirebase(); await fb.auth().signOut(); } catch (e) {}
+        limparAparelho();
+        exibirNotificacao('Você saiu. Os dados deste aparelho foram apagados');
+      };
+
       // ===== ADMINISTRADOR DE ACESSOS =====
-      // Quem é administrador: tem um documento em admins/{id} (criado à mão no console do Firebase).
-      // O administrador vê o cadastro e os acessos de cada conta e pode bloquear/desbloquear.
-      // Ele NÃO vê lançamentos, metas nem planejamento de ninguém (as regras da nuvem impedem).
+      // Administrador = quem tem um documento em admins/{id} (criado no console do Firebase).
+      // Vê o cadastro e os acessos de cada conta e pode bloquear/liberar.
+      // NÃO vê lançamentos, metas nem planejamento de ninguém (as regras da nuvem impedem).
       const [ehAdmin, setEhAdmin] = useState(false);
       const [acessos, setAcessos] = useState(null);
       const [buscaAcesso, setBuscaAcesso] = useState('');
       const [carregandoAcessos, setCarregandoAcessos] = useState(false);
+      const [avisoLogin, setAvisoLogin] = useState('');
       async function carregarAcessos() {
         setCarregandoAcessos(true);
         try {
@@ -791,7 +1020,8 @@
           lista.sort((a, b) => String(b.criadoEm || '').localeCompare(String(a.criadoEm || '')));
           setAcessos(lista);
         } catch (e) {
-          exibirNotificacao('Não foi possível carregar os acessos.');
+          setAcessos([]);
+          exibirNotificacao('Não foi possível carregar as contas. Confira a internet.');
         }
         setCarregandoAcessos(false);
       }
@@ -809,78 +1039,39 @@
         }
       }
       useEffect(() => { if (abaAtiva === 'admin' && ehAdmin && acessos === null && !carregandoAcessos) carregarAcessos(); }, [abaAtiva, ehAdmin]);
+      // Se deixar de ser administrador (ou sair), volta para o Dashboard
+      useEffect(() => { if (abaAtiva === 'admin' && !ehAdmin) setAbaAtiva('dashboard'); }, [ehAdmin]);
 
-      // ===== LOGIN COM E-MAIL E SENHA =====
-      const [abaEntrada, setAbaEntrada] = useState('entrar'); // 'entrar' (já tenho conta) ou 'criar'
-      const [formLogin, setFormLogin] = useState({ email: '', senha: '', nome: '', idade: '', senha2: '' });
-      const [erroLogin, setErroLogin] = useState('');
-      const [avisoLogin, setAvisoLogin] = useState('');
-      const [enviandoLogin, setEnviandoLogin] = useState(false);
-      const campoLogin = (campo) => (e) => { setFormLogin(f => ({ ...f, [campo]: e.target.value })); setErroLogin(''); };
-      const emailValido = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
-
-      async function entrarComEmail(e) {
-        e.preventDefault();
-        setErroLogin(''); setAvisoLogin('');
-        const email = formLogin.email.trim().toLowerCase();
-        if (!emailValido(email)) { setErroLogin('Digite um e-mail válido, por exemplo nome@gmail.com.'); return; }
-        if (!formLogin.senha) { setErroLogin('Digite a sua senha.'); return; }
-        setEnviandoLogin(true);
+      // Excluir a conta e todos os dados (direito previsto na LGPD)
+      const excluirConta = async () => {
+        const sessao = nuvemRef.current;
+        if (!sessao) return;
+        if (!window.confirm('Excluir a sua conta e TODOS os seus dados?\n\nSeus lançamentos, metas, contas fixas e histórico serão apagados da nuvem e deste aparelho. Não dá para desfazer.\n\nDica: se quiser guardar uma cópia, cancele e use antes "Exportar backup".')) return;
+        if (!window.confirm('Última confirmação: apagar tudo agora?')) return;
+        const usuario = sessao.fb.auth().currentUser;
+        if (!usuario) return;
+        // O Google exige um login recente para excluir a conta
+        const ultimoLogin = Date.parse((usuario.metadata && usuario.metadata.lastSignInTime) || 0);
+        if (!ultimoLogin || Date.now() - ultimoLogin > 4 * 60 * 1000) {
+          window.alert('Por segurança, é preciso ter entrado na conta há poucos minutos.\n\nSaia da conta, entre de novo e, logo em seguida, toque em "Excluir minha conta e meus dados".');
+          return;
+        }
+        clearTimeout(timerNuvem.current); timerNuvem.current = null;
+        nuvemRef.current = null; // para de sincronizar antes de apagar
         try {
-          const fb = await carregarFirebase();
-          await fb.auth().signInWithEmailAndPassword(email, formLogin.senha);
-          setFormLogin({ email: '', senha: '', nome: '', idade: '', senha2: '' });
-        } catch (erro) { setErroLogin(mensagemLogin(erro)); }
-        setEnviandoLogin(false);
-      }
-
-      async function criarConta(e) {
-        e.preventDefault();
-        setErroLogin(''); setAvisoLogin('');
-        const nome = formLogin.nome.trim().replace(/\s+/g, ' ');
-        const email = formLogin.email.trim().toLowerCase();
-        const idade = Number(formLogin.idade);
-        if (nome.split(' ').length < 2 || nome.length < 5) { setErroLogin('Digite o seu nome completo (nome e sobrenome).'); return; }
-        if (!emailValido(email)) { setErroLogin('Digite um e-mail válido, por exemplo nome@gmail.com.'); return; }
-        if (!Number.isInteger(idade) || idade < 13 || idade > 120) { setErroLogin('Digite a sua idade em anos (de 13 a 120).'); return; }
-        if (formLogin.senha.length < 6) { setErroLogin('A senha precisa ter pelo menos 6 caracteres.'); return; }
-        if (formLogin.senha !== formLogin.senha2) { setErroLogin('As duas senhas não são iguais.'); return; }
-        setEnviandoLogin(true);
-        try {
-          const fb = await carregarFirebase();
-          cadastroPendente = { email, nome, idade };
-          const cred = await fb.auth().createUserWithEmailAndPassword(email, formLogin.senha);
-          if (cred && cred.user && cred.user.updateProfile) await cred.user.updateProfile({ displayName: nome }).catch(() => {});
-          setFormLogin({ email: '', senha: '', nome: '', idade: '', senha2: '' });
-        } catch (erro) { cadastroPendente = null; setErroLogin(mensagemLogin(erro)); }
-        setEnviandoLogin(false);
-      }
-
-      async function esqueciSenha() {
-        setErroLogin(''); setAvisoLogin('');
-        const email = formLogin.email.trim().toLowerCase();
-        if (!emailValido(email)) { setErroLogin('Digite o seu e-mail no campo acima e toque de novo em "Esqueci a senha".'); return; }
-        try {
-          const fb = await carregarFirebase();
-          await fb.auth().sendPasswordResetEmail(email);
-          setAvisoLogin('Se existir uma conta com ' + email + ', enviamos um e-mail para criar uma senha nova.');
-        } catch (erro) { setErroLogin(mensagemLogin(erro)); }
-      }
-
-      const sairDaConta = async () => {
-        if (!window.confirm('Sair da conta? Seus dados ficam guardados na sua conta e voltam quando você entrar de novo. Neste aparelho, a tela fica sem os seus dados.')) return;
-        try {
-          await gravarNaNuvem();   // termina de enviar o que faltava antes de sair
-          const fb = await carregarFirebase();
-          await fb.auth().signOut();
-        } catch (e) {}
-      };
-
-      // Tela de entrada (quando o login estiver ligado): entrar/criar conta ou usar sem conta
-      const [semContaEscolhido, setSemContaEscolhido] = useState(() => { try { return localStorage.getItem('@finapp_sem_conta') === '1'; } catch (e) { return false; } });
-      const usarSemConta = () => {
-        setSemContaEscolhido(true);
-        try { localStorage.setItem('@finapp_sem_conta', '1'); } catch (e) {}
+          await sessao.doc.delete();
+          await sessao.fb.firestore().collection('acessos').doc(usuario.uid).delete().catch(() => {});
+          await usuario.delete();
+        } catch (e) {
+          try { await sessao.fb.auth().signOut(); } catch (e2) {}
+          limparAparelho();
+          window.alert(e && e.code === 'auth/requires-recent-login'
+            ? 'Os dados foram apagados, mas o Google pediu um login recente para remover a conta. Entre de novo e toque em "Excluir minha conta" mais uma vez.'
+            : 'Não foi possível terminar a exclusão (sem internet?). Entre de novo e tente outra vez.');
+          return;
+        }
+        limparAparelho();
+        exibirNotificacao('Sua conta e todos os seus dados foram excluídos');
       };
 
       // Anota uma ação no histórico e devolve a lista nova (para salvar junto)
@@ -971,6 +1162,17 @@
       const gradienteGastos = totalGastoGeral > 0
         ? 'conic-gradient(' + fatiasGastos.map(f => { const ini = acumuladoFatias; acumuladoFatias += (f.valor / totalGastoGeral) * 360; return f.cor + ' ' + ini + 'deg ' + acumuladoFatias + 'deg'; }).join(', ') + ')'
         : 'var(--border)';
+      // Evolução: quanto entrou e saiu da conta nos 6 meses até o mês escolhido (sem agendados)
+      const evolucao = Array.from({ length: 6 }, (_, i) => {
+        const mes = somarMeses(mesSelecionado, i - 5);
+        const doMes = transacoes.filter(t => mesDe(t.date) === mes && !ehFuturo(t));
+        const entrou = somar(doMes.filter(t => t.type === 'receita' && entraNaConta(t)));
+        const saiu = somar(doMes.filter(t => t.type !== 'receita'));
+        return { mes, entrou, saiu };
+      });
+      const maxEvolucao = Math.max(1, ...evolucao.map(e => Math.max(e.entrou, e.saiu)));
+      const temEvolucao = evolucao.some(e => e.entrou > 0 || e.saiu > 0);
+
       // Contas a vencer nos próximos 7 dias (lançamentos agendados de saída)
       const daquiA7 = (() => { const d = new Date(hoje + 'T12:00:00'); d.setDate(d.getDate() + 7); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
       const proximosVencimentos = transacoes.filter(t => t.type !== 'receita' && t.date > hoje && t.date <= daquiA7).sort((a, b) => a.date.localeCompare(b.date));
@@ -1114,12 +1316,65 @@
       // O 🎤 do app abre o teclado no campo de lançamento rápido; a pessoa fala pelo 🎤 do próprio
       // teclado (Gboard, ditado do iPhone), que já tem permissão no celular. Assim o site nunca
       // pede acesso ao microfone. Quando ela para de falar, o app entende sozinho.
-      function ouvirVoz() {
+      // Transcrição: quando o navegador oferece reconhecimento de voz (Chrome, Android, iPhone),
+      // o próprio app ouve, escreve no campo enquanto a pessoa fala e entende o lançamento no fim.
+      // Onde não houver, abre o teclado para usar o 🎤 do próprio teclado (como antes).
+      const reconhecedorRef = useRef(null);
+      function usarTecladoParaVoz() {
         const campo = document.getElementById && document.getElementById('texto-rapido');
         if (campo && campo.focus) campo.focus();
-        setOuvindo(true);
-        setAvisoVoz('');
+        setOuvindo('teclado');
       }
+      function ouvirVoz() {
+        // Tocar de novo enquanto grava = parar
+        if (reconhecedorRef.current) { try { reconhecedorRef.current.stop(); } catch (e) {} return; }
+        setAvisoVoz('');
+        setPreviaRapida(null);
+        clearTimeout(timerRapido.current);
+        const Reconhecimento = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!Reconhecimento) { usarTecladoParaVoz(); return; }
+        let rec;
+        try { rec = new Reconhecimento(); } catch (e) { usarTecladoParaVoz(); return; }
+        rec.lang = 'pt-BR';
+        rec.interimResults = true;
+        rec.continuous = false;
+        rec.maxAlternatives = 1;
+        let textoFinal = '';
+        rec.onresult = (ev) => {
+          let parcial = '';
+          for (let i = ev.resultIndex; i < ev.results.length; i++) {
+            const r = ev.results[i];
+            if (r.isFinal) textoFinal += r[0].transcript + ' ';
+            else parcial += r[0].transcript;
+          }
+          setTextoRapido((textoFinal + parcial).replace(/\s+/g, ' ').trim());
+        };
+        rec.onerror = (ev) => {
+          const mensagens = {
+            'not-allowed': 'O app não tem permissão para usar o microfone. Libere o microfone para este site nas configurações do navegador, ou use o 🎤 do teclado.',
+            'service-not-allowed': 'Este aparelho não deixou o app usar o reconhecimento de voz. Use o 🎤 do teclado: toque no campo e depois no microfone do teclado.',
+            'no-speech': 'Não ouvi nada. Toque no microfone e fale de novo.',
+            'audio-capture': 'Nenhum microfone encontrado neste aparelho.',
+            'network': 'Sem internet para transcrever a voz. Tente de novo ou use o 🎤 do teclado.'
+          };
+          if (ev.error !== 'aborted') setAvisoVoz(mensagens[ev.error] || 'Não consegui ouvir. Tente de novo ou use o 🎤 do teclado.');
+        };
+        rec.onend = () => {
+          reconhecedorRef.current = null;
+          setOuvindo(false);
+          const texto = textoFinal.replace(/\s+/g, ' ').trim();
+          if (!texto) return;
+          setTextoRapido(texto);
+          const r = interpretarTexto(texto, catEntrada, catSaida, hojeISO());
+          if (r) setPreviaRapida(r);
+          else setAvisoVoz('Entendi "' + texto + '", mas não achei o valor. Fale algo como "gastei 30 no mercado".');
+        };
+        reconhecedorRef.current = rec;
+        setOuvindo('gravando');
+        try { rec.start(); } catch (e) { reconhecedorRef.current = null; usarTecladoParaVoz(); }
+      }
+      // Para de ouvir se a pessoa sair da tela
+      useEffect(() => () => { if (reconhecedorRef.current) { try { reconhecedorRef.current.abort(); } catch (e) {} } }, []);
 
       // Entende sozinho ~1 s depois que a pessoa para de falar ou digitar
       const timerRapido = useRef(null);
@@ -1560,16 +1815,20 @@
             if (!window.confirm('Isso vai substituir os dados atuais deste aparelho. Continuar?')) return;
             const limites = d.limitesCategorias ? { ...limitesCategorias, ...d.limitesCategorias } : limitesCategorias;
             const novasMetas = Array.isArray(d.metas) ? d.metas.map(normalizarMeta) : metas;
-            const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes : [];
-            setTransacoes(d.transacoes);
+            const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes.filter(r => r && /^\d{4}-\d{2}$/.test(String(r.inicio))) : [];
+            const { validas, descartadas } = limparTransacoes(d.transacoes);
+            setTransacoes(validas);
             setLimitesCategorias(limites);
             setMetas(novasMetas);
             setRecorrentes(novosRecorrentes);
             const novasExtras = d.categoriasExtras ? normalizarExtras(d.categoriasExtras) : categoriasExtras;
             setCategoriasExtras(novasExtras);
-            const hist = anotar('Importou backup', d.transacoes.length + ' lançamentos');
-            salvarTudoNoDisco({ transacoes: d.transacoes, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, historico: hist });
-            exibirNotificacao('📥 Dados importados com sucesso!');
+            // Traz também o histórico do backup, com o registro da importação no topo
+            const histBackup = Array.isArray(d.historico) ? d.historico.filter(h => h && typeof h.quando === 'string') : [];
+            const hist = [{ id: Date.now() + '-imp', quando: new Date().toISOString(), quem: nomeAutor, acao: 'Importou backup', detalhe: validas.length + ' lançamentos' }, ...histBackup].slice(0, 500);
+            setHistorico(hist);
+            salvarTudoNoDisco({ transacoes: validas, limitesCategorias: limites, metas: novasMetas, recorrentes: novosRecorrentes, categoriasExtras: novasExtras, historico: hist });
+            exibirNotificacao(descartadas.length ? '📥 Importado. ' + descartadas.length + ' lançamento(s) sem data ou valor ficaram de fora.' : '📥 Dados importados com sucesso!');
           } catch (err) {
             exibirNotificacao('❌ Arquivo de backup inválido.');
           }
@@ -1662,65 +1921,19 @@
       const botaoNovaCategoria = { background: 'none', border: '1px dashed var(--accent)', color: 'var(--accent-text)', borderRadius: '10px', padding: '8px 12px', fontWeight: '700', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' };
       const tituloSecao = { fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 8px 0' };
 
-      // Tela de entrada: aparece quando o login estiver ligado e ninguém entrou neste aparelho
-      const mostrarEntrada = !!FIREBASE_CONFIG && !usuarioNuvem && !contaAtiva && !semContaEscolhido && statusNuvem !== 'conectando';
-      if (mostrarEntrada) {
+      // Com o login ligado, o app só abre depois de entrar (Google ou e-mail e senha)
+      if (estadoLogin === 'carregando' || estadoLogin === 'fora' || estadoLogin === 'sem-internet') {
         return (
-          <div className="app-root" style={{ minHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 16px', backgroundColor: 'var(--bg)' }}>
-            <div style={{ ...estilos.card, maxWidth: '400px', width: '100%', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'center' }}>
-              <img src="./logo.png" alt="" width="64" height="64" style={{ borderRadius: '18px' }} />
-              <div>
-                <h1 style={{ margin: '0 0 6px 0', fontSize: '24px', color: 'var(--text-strong)' }}>EddFinança</h1>
-                <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-muted)' }}>Cada conta tem o seu espaço: metas, lançamentos e planejamento só seus. Ninguém mais vê, nem no mesmo celular.</p>
-              </div>
-              <div role="tablist" style={{ display: 'flex', width: '100%', backgroundColor: 'var(--bg)', borderRadius: '12px', padding: '4px', gap: '4px' }}>
-                {[['entrar', 'Já tenho conta'], ['criar', 'Criar conta']].map(([id, rotulo]) => (
-                  <button key={id} role="tab" aria-selected={abaEntrada === id} onClick={() => { setAbaEntrada(id); setErroLogin(''); setAvisoLogin(''); }} style={{ flex: 1, padding: '10px', borderRadius: '9px', border: 'none', cursor: 'pointer', fontWeight: '700', fontSize: '14px', backgroundColor: abaEntrada === id ? 'var(--surface)' : 'transparent', color: abaEntrada === id ? 'var(--text-strong)' : 'var(--text-muted)', boxShadow: abaEntrada === id ? '0 1px 4px rgba(0,0,0,0.12)' : 'none' }}>{rotulo}</button>
-                ))}
-              </div>
-              {erroLogin && <div role="alert" style={{ width: '100%', backgroundColor: 'rgba(244,63,94,0.15)', color: 'var(--danger-text)', padding: '10px', borderRadius: '8px', fontSize: '13px', textAlign: 'left' }}>{erroLogin}</div>}
-              {avisoLogin && <div role="status" style={{ width: '100%', backgroundColor: 'rgba(var(--accent-rgb), 0.12)', color: 'var(--accent-text)', padding: '10px', borderRadius: '8px', fontSize: '13px', textAlign: 'left' }}>{avisoLogin}</div>}
-              <form onSubmit={abaEntrada === 'criar' ? criarConta : entrarComEmail} style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '12px', textAlign: 'left' }}>
-                {abaEntrada === 'criar' && (
-                  <div>
-                    <label htmlFor="cad-nome" style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Nome completo</label>
-                    <input id="cad-nome" type="text" autoComplete="name" value={formLogin.nome} onChange={campoLogin('nome')} placeholder="Ex.: Maria da Silva" style={{ ...estilos.input, marginTop: '6px' }} />
-                  </div>
-                )}
-                <div>
-                  <label htmlFor="login-email" style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>E-mail</label>
-                  <input id="login-email" type="email" inputMode="email" autoComplete="email" value={formLogin.email} onChange={campoLogin('email')} placeholder="nome@gmail.com" style={{ ...estilos.input, marginTop: '6px' }} />
-                </div>
-                {abaEntrada === 'criar' && (
-                  <div>
-                    <label htmlFor="cad-idade" style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Idade</label>
-                    <input id="cad-idade" type="number" inputMode="numeric" min="13" max="120" value={formLogin.idade} onChange={campoLogin('idade')} placeholder="Ex.: 32" style={{ ...estilos.input, marginTop: '6px', width: '120px' }} />
-                  </div>
-                )}
-                <div>
-                  <label htmlFor="login-senha" style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>{abaEntrada === 'criar' ? 'Crie uma senha (mínimo 6 caracteres)' : 'Senha'}</label>
-                  <input id="login-senha" type="password" autoComplete={abaEntrada === 'criar' ? 'new-password' : 'current-password'} value={formLogin.senha} onChange={campoLogin('senha')} style={{ ...estilos.input, marginTop: '6px' }} />
-                </div>
-                {abaEntrada === 'criar' && (
-                  <div>
-                    <label htmlFor="cad-senha2" style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>Repita a senha</label>
-                    <input id="cad-senha2" type="password" autoComplete="new-password" value={formLogin.senha2} onChange={campoLogin('senha2')} style={{ ...estilos.input, marginTop: '6px' }} />
-                  </div>
-                )}
-                <button type="submit" disabled={enviandoLogin} style={{ ...estilos.buttonPrimary, justifyContent: 'center', width: '100%', padding: '14px', fontSize: '15px', opacity: enviandoLogin ? 0.7 : 1 }}>
-                  {enviandoLogin ? 'Aguarde…' : abaEntrada === 'criar' ? 'Criar minha conta' : 'Entrar'}
-                </button>
-                {abaEntrada === 'entrar' && (
-                  <button type="button" onClick={esqueciSenha} style={{ background: 'none', border: 'none', color: 'var(--accent-text)', fontSize: '13px', fontWeight: '600', cursor: 'pointer', alignSelf: 'center' }}>Esqueci a senha</button>
-                )}
-              </form>
-              <button onClick={usarSemConta} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '13px', textDecoration: 'underline', cursor: 'pointer' }}>Usar sem conta neste aparelho</button>
-              <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-faint)' }}>Sem conta, os dados ficam só neste aparelho e não têm cópia na nuvem.</p>
-            </div>
-            {mensagemNotificacao && (
-              <div style={{ position: 'fixed', top: '20px', left: '16px', right: '16px', maxWidth: '420px', margin: '0 auto', backgroundColor: 'var(--accent)', color: 'var(--on-accent)', padding: '12px 16px', borderRadius: '12px', fontWeight: 'bold', zIndex: 100 }}>{mensagemNotificacao}</div>
-            )}
-          </div>
+          <TelaLogin
+            estado={estadoLogin}
+            aoGoogle={entrarComGoogle}
+            aoEntrar={entrarComEmail}
+            aoCriar={criarContaEmail}
+            aoEsqueci={esqueciSenha}
+            traduzir={traduzirErroLogin}
+            aoTentarDeNovo={() => location.reload()}
+            avisoExterno={avisoLogin}
+          />
         );
       }
 
@@ -1798,26 +2011,32 @@
 
               <div style={{ marginTop: '24px', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px' }}>
                 {usuarioNuvem ? (
+                  <React.Fragment>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     {usuarioNuvem.foto
                       ? <img src={usuarioNuvem.foto} alt="" width="34" height="34" referrerPolicy="no-referrer" style={{ borderRadius: '50%', flexShrink: 0 }} />
                       : <div style={{ width: '34px', height: '34px', borderRadius: '50%', backgroundColor: 'var(--accent)', color: 'var(--on-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', flexShrink: 0 }}>{(usuarioNuvem.nome || '?').charAt(0).toUpperCase()}</div>}
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <strong style={{ display: 'block', fontSize: '13px', color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{usuarioNuvem.nome}</strong>
-                      <span style={{ fontSize: '11px', color: statusNuvem === 'erro' ? 'var(--danger-text)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <CloudIcon size={12} /> {statusNuvem === 'sincronizado' ? 'Cópia na nuvem em dia' : statusNuvem === 'salvando' || statusNuvem === 'conectando' ? 'Sincronizando…' : 'Falha ao sincronizar'}
+                      <span style={{ fontSize: '11px', color: statusNuvem === 'erro' || statusNuvem === 'cheio' ? 'var(--danger-text)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <CloudIcon size={12} /> {statusNuvem === 'sincronizado' ? 'Cópia na nuvem em dia' : statusNuvem === 'salvando' || statusNuvem === 'conectando' ? 'Sincronizando…' : statusNuvem === 'cheio' ? 'Nuvem cheia: exporte um backup' : 'Sem conexão: tenta de novo sozinho'}
                       </span>
                     </div>
                     <button onClick={sairDaConta} title="Sair da conta" aria-label="Sair da conta" style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: '4px' }}><LogOut size={16} /></button>
                   </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '11px' }}>
+                    <a href="./privacidade.html" style={{ color: 'var(--text-muted)', fontWeight: '600' }}>Privacidade</a>
+                    <button onClick={excluirConta} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--danger-text)', fontWeight: '600', fontSize: '11px', cursor: 'pointer' }}>Excluir minha conta e meus dados</button>
+                  </div>
+                  </React.Fragment>
                 ) : (
                   <React.Fragment>
                     <label htmlFor="nome-usuario" style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>Quem está usando</label>
                     <input id="nome-usuario" type="text" value={nomeUsuario} onChange={e => salvarNome(e.target.value)} placeholder="Seu nome" maxLength={40} style={{ ...estilos.input, marginTop: '6px', padding: '8px 12px', fontSize: '13px' }} />
                     <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: 'var(--text-faint)' }}>Aparece no histórico ao lado de cada registro.</p>
                     {FIREBASE_CONFIG && (
-                      <button onClick={() => { setSemContaEscolhido(false); try { localStorage.removeItem('@finapp_sem_conta'); } catch (e) {} setMenuAberto(false); }} style={{ marginTop: '10px', width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: '700', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                        Entrar ou criar conta
+                      <button onClick={() => entrarComGoogle().catch(e => exibirNotificacao(traduzirErroLogin(e)))} style={{ marginTop: '10px', width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--surface)', color: 'var(--text)', fontWeight: '700', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                        <span style={{ fontWeight: '900', color: '#4285F4' }}>G</span> Entrar ou criar conta com Google
                       </button>
                     )}
                   </React.Fragment>
@@ -1825,12 +2044,32 @@
               </div>
 
               <div style={{ marginTop: '22px' }}>
-                <button
-                  onClick={() => setModoTema(modoTema === 'claro' ? 'escuro' : 'claro')}
-                  style={{ width: '100%', marginBottom: '18px', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)', color: 'var(--text)', fontWeight: '600', fontSize: '13px', cursor: 'pointer' }}
-                >
-                  {modoTema === 'claro' ? '🌙 Mudar para tema escuro' : '☀️ Mudar para tema claro'}
-                </button>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 8px 0', fontWeight: '600', textTransform: 'uppercase' }}>Aparência</p>
+                <div role="radiogroup" aria-label="Aparência do app" style={{ display: 'flex', gap: '4px', padding: '4px', borderRadius: '12px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--bg)' }}>
+                  {[
+                    { id: 'auto', rotulo: '🌗 Auto' },
+                    { id: 'claro', rotulo: '☀️ Claro' },
+                    { id: 'escuro', rotulo: '🌙 Escuro' }
+                  ].map(op => {
+                    const ativo = preferenciaTema === op.id;
+                    return (
+                      <button
+                        key={op.id}
+                        role="radio"
+                        aria-checked={ativo}
+                        onClick={() => setPreferenciaTema(op.id)}
+                        style={{ flex: 1, padding: '8px 4px', borderRadius: '9px', border: 'none', backgroundColor: ativo ? 'var(--accent)' : 'transparent', color: ativo ? 'var(--on-accent)' : 'var(--text)', fontWeight: ativo ? '700' : '600', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      >
+                        {op.rotulo}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '6px 0 18px 0' }}>
+                  {preferenciaTema === 'auto'
+                    ? 'Escuro das 18h às 6h, claro durante o dia' + (noite ? ' · agora: escuro' : ' · agora: claro')
+                    : 'Fica sempre ' + (preferenciaTema === 'escuro' ? 'escuro' : 'claro') + '. Toque em Auto para voltar ao horário.'}
+                </p>
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 10px 0', fontWeight: '600', textTransform: 'uppercase' }}>Cor do tema</p>
                 <div style={{ display: 'flex', gap: '10px' }}>
                   {Object.entries(TEMAS).map(([nome, t]) => (
@@ -1927,12 +2166,13 @@
                     <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 12px 0' }}>Escreva ou fale do seu jeito: "gastei 46 na padaria", "recebi 3500 de salário", "paguei 120 de luz ontem".</p>
                     <form onSubmit={e => { e.preventDefault(); clearTimeout(timerRapido.current); setOuvindo(false); interpretarRapido(textoRapido); }} style={{ display: 'flex', gap: '8px' }}>
                       <input id="texto-rapido" type="text" enterKeyHint="done" autoComplete="off" value={textoRapido} onChange={e => mudarTextoRapido(e.target.value)} placeholder="Ex: gastei 46 na padaria" style={{ ...estilos.input, flex: 1, minWidth: 0 }} aria-label="Lançamento rápido" />
-                      <button type="button" onClick={ouvirVoz} title="Falar" aria-label="Falar o lançamento" style={{ flexShrink: 0, width: '46px', borderRadius: '12px', border: ouvindo ? 'none' : '1px solid var(--border-strong)', backgroundColor: ouvindo ? 'var(--accent)' : 'var(--bg)', color: ouvindo ? 'var(--on-accent)' : 'var(--text)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <button type="button" onClick={ouvirVoz} title={ouvindo === 'gravando' ? 'Parar de ouvir' : 'Falar'} aria-label={ouvindo === 'gravando' ? 'Parar de ouvir' : 'Falar o lançamento'} aria-pressed={ouvindo === 'gravando'} style={{ flexShrink: 0, width: '46px', borderRadius: '12px', border: ouvindo ? 'none' : '1px solid var(--border-strong)', backgroundColor: ouvindo === 'gravando' ? '#e11d48' : ouvindo ? 'var(--accent)' : 'var(--bg)', color: ouvindo ? '#ffffff' : 'var(--text)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: ouvindo === 'gravando' ? '0 0 0 4px rgba(225, 29, 72, 0.25)' : 'none' }}>
                         <Mic size={18} />
                       </button>
                       <button type="submit" style={{ ...estilos.buttonPrimary, flexShrink: 0, padding: '10px 14px' }}>Entender</button>
                     </form>
-                    {ouvindo && !previaRapida && <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: 'var(--accent-text)', fontWeight: '600', backgroundColor: 'rgba(var(--accent-rgb), 0.1)', borderRadius: '8px', padding: '8px 10px' }}>🎤 Toque no microfone do teclado e fale, ex.: "gastei 30 no mercado". Quando parar de falar, o app entende sozinho.</p>}
+                    {ouvindo === 'gravando' && <p role="status" style={{ margin: '8px 0 0 0', fontSize: '12px', color: 'var(--danger-text)', fontWeight: '700', backgroundColor: 'rgba(225, 29, 72, 0.1)', borderRadius: '8px', padding: '8px 10px' }}>🔴 Ouvindo… fale, ex.: "gastei 30 no mercado". Quando você parar de falar, o app escreve e entende sozinho.</p>}
+                    {ouvindo === 'teclado' && !previaRapida && <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: 'var(--accent-text)', fontWeight: '600', backgroundColor: 'rgba(var(--accent-rgb), 0.1)', borderRadius: '8px', padding: '8px 10px' }}>🎤 Toque no microfone do teclado e fale, ex.: "gastei 30 no mercado". Quando parar de falar, o app entende sozinho.</p>}
                     {avisoVoz && !ouvindo && <p role="status" style={{ margin: '8px 0 0 0', fontSize: '12px', color: 'var(--c-amber)', fontWeight: '600', backgroundColor: 'rgba(245, 158, 11, 0.1)', borderRadius: '8px', padding: '8px 10px' }}>{avisoVoz}</p>}
                     {previaRapida && (
                       <div style={{ marginTop: '12px', backgroundColor: 'var(--bg)', border: '1px dashed var(--accent)', borderRadius: '12px', padding: '12px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
@@ -2051,6 +2291,41 @@
                         </div>
                       )}
                     </div>
+                  </div>
+
+                  <div style={estilos.card}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                      <div>
+                        <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 4px 0' }}>Evolução dos últimos 6 meses</h3>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>Quanto entrou e quanto saiu da conta em cada mês</p>
+                      </div>
+                      <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><span style={{ width: '10px', height: '10px', borderRadius: '3px', backgroundColor: 'var(--accent)' }} /> Entrou</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><span style={{ width: '10px', height: '10px', borderRadius: '3px', backgroundColor: 'var(--danger-text)' }} /> Saiu</span>
+                      </div>
+                    </div>
+                    {!temEvolucao ? (
+                      <p style={{ color: 'var(--text-faint)', fontSize: '13px', margin: 0 }}>Os meses com lançamentos aparecem aqui.</p>
+                    ) : (
+                      <div role="img" aria-label={'Evolução: ' + evolucao.map(e => NOMES_MESES[Number(e.mes.slice(5, 7)) - 1] + ' entrou ' + formatarMoeda(e.entrou) + ' e saiu ' + formatarMoeda(e.saiu)).join('; ')} style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: isMobile ? '6px' : '14px', alignItems: 'end' }}>
+                        {evolucao.map(e => {
+                          const saldo = e.entrou - e.saiu;
+                          const selecionado = e.mes === mesSelecionado;
+                          return (
+                            <div key={e.mes} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                              <div style={{ height: '120px', width: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: '3px', borderBottom: '1px solid var(--border)' }}>
+                                <div title={'Entrou ' + formatarMoeda(e.entrou)} style={{ width: '40%', maxWidth: '22px', height: (e.entrou / maxEvolucao * 100) + '%', minHeight: e.entrou > 0 ? '3px' : 0, backgroundColor: 'var(--accent)', borderRadius: '4px 4px 0 0' }} />
+                                <div title={'Saiu ' + formatarMoeda(e.saiu)} style={{ width: '40%', maxWidth: '22px', height: (e.saiu / maxEvolucao * 100) + '%', minHeight: e.saiu > 0 ? '3px' : 0, backgroundColor: 'var(--danger-text)', borderRadius: '4px 4px 0 0' }} />
+                              </div>
+                              <span style={{ fontSize: '11px', fontWeight: selecionado ? '800' : '600', color: selecionado ? 'var(--accent-text)' : 'var(--text-muted)' }}>{NOMES_MESES[Number(e.mes.slice(5, 7)) - 1].slice(0, 3)}</span>
+                              <span style={{ fontSize: isMobile ? '9px' : '10px', fontWeight: '700', color: saldo >= 0 ? 'var(--accent-text)' : 'var(--danger-text)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                                {(e.entrou || e.saiu) ? (saldo >= 0 ? '+' : '−') + Math.abs(saldo).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) : '—'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   <div style={estilos.card}>
@@ -2549,7 +2824,7 @@
                               <div key={a.uid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', backgroundColor: 'var(--bg)', border: '1px solid ' + (a.bloqueado ? 'rgba(244, 63, 94, 0.45)' : 'var(--border)'), borderRadius: '12px', padding: '12px 14px' }}>
                                 <div style={{ minWidth: 0, flex: '1 1 240px' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                    <strong style={{ fontSize: '14px', color: 'var(--text-strong)' }}>{a.nomeCompleto || '(sem nome)'}</strong>
+                                    <strong style={{ fontSize: '14px', color: 'var(--text-strong)', overflowWrap: 'anywhere' }}>{a.nomeCompleto || '(sem nome)'}</strong>
                                     {a.bloqueado
                                       ? <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(244, 63, 94, 0.15)', color: 'var(--danger-text)', fontWeight: '700', textTransform: 'uppercase' }}>Bloqueada</span>
                                       : <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(var(--accent-rgb), 0.15)', color: 'var(--accent-text)', fontWeight: '700', textTransform: 'uppercase' }}>Liberada</span>}
@@ -2587,7 +2862,13 @@
                   {historico.length === 0 ? (
                     <p style={{ color: 'var(--text-faint)', textAlign: 'center', padding: '32px 0' }}>Nenhum registro ainda. Faça um lançamento e ele aparece aqui.</p>
                   ) : (
-                    Object.entries(historico.reduce((acc, h) => { const dia = h.quando.slice(0, 10); (acc[dia] = acc[dia] || []).push(h); return acc; }, {})).map(([dia, itens]) => (
+                    Object.entries(historico.reduce((acc, h) => {
+                      // Dia no fuso do aparelho (o horário guardado é UTC; depois das 21h virava o dia seguinte)
+                      const q = new Date(h.quando);
+                      const dia = q.getFullYear() + '-' + String(q.getMonth() + 1).padStart(2, '0') + '-' + String(q.getDate()).padStart(2, '0');
+                      (acc[dia] = acc[dia] || []).push(h);
+                      return acc;
+                    }, {})).map(([dia, itens]) => (
                       <div key={dia} style={estilos.card}>
                         <h4 style={{ margin: '0 0 12px 0', fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{dia === hoje ? 'Hoje' : formatarDataBR(dia)}</h4>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -2927,6 +3208,140 @@
             </div>
           )}
 
+        </div>
+      );
+    }
+
+    // ===== TELA DE ENTRADA (login obrigatório quando o Firebase está ligado) =====
+    function TelaLogin({ estado, aoGoogle, aoEntrar, aoCriar, aoEsqueci, traduzir, aoTentarDeNovo, avisoExterno }) {
+      const [modo, setModo] = useState('entrar'); // 'entrar' | 'criar' | 'esqueci'
+      const [nome, setNome] = useState('');
+      const [idade, setIdade] = useState('');
+      const [email, setEmail] = useState('');
+      const [senha, setSenha] = useState('');
+      const [verSenha, setVerSenha] = useState(false);
+      const [erro, setErro] = useState('');
+      const [aviso, setAviso] = useState('');
+      const [ocupado, setOcupado] = useState(false);
+
+      const rodar = async (acao) => {
+        setErro(''); setAviso(''); setOcupado(true);
+        try { await acao(); } catch (e) { setErro(traduzir(e)); } finally { setOcupado(false); }
+      };
+      const trocarModo = (m) => { setModo(m); setErro(''); setAviso(''); setAvisoExternoLido(true); };
+      // O aviso que vem de fora (ex.: conta bloqueada) some quando a pessoa tenta de novo
+      const [avisoExternoLido, setAvisoExternoLido] = useState(false);
+      useEffect(() => { setAvisoExternoLido(false); }, [avisoExterno]);
+      const avisoMostrar = avisoExternoLido ? '' : avisoExterno;
+
+      const enviar = (e) => {
+        e.preventDefault();
+        setAvisoExternoLido(true);
+        setErro(''); setAviso('');
+        if (modo === 'esqueci') return rodar(async () => {
+          if (!email.trim()) throw { code: 'auth/missing-email' };
+          await aoEsqueci(email);
+          setModo('entrar');
+          setAviso('Pronto! Enviamos um link para ' + email.trim() + '. Abra o e-mail (veja também o spam) para criar uma senha nova.');
+        });
+        if (!email.trim()) return setErro('Digite o seu e-mail.');
+        if (!senha) return setErro('Digite a sua senha.');
+        if (modo === 'criar') {
+          const nomeLimpo = nome.trim().replace(/\s+/g, ' ');
+          const anos = Number(idade);
+          if (nomeLimpo.split(' ').length < 2) return setErro('Digite o seu nome completo (nome e sobrenome).');
+          if (!Number.isInteger(anos) || anos < 13 || anos > 120) return setErro('Digite a sua idade em anos (de 13 a 120).');
+          return rodar(async () => {
+            if (senha.length < 6) throw { code: 'auth/weak-password' };
+            await aoCriar(nomeLimpo, email, senha, anos);
+          });
+        }
+        return rodar(() => aoEntrar(email, senha));
+      };
+
+      const campo = { width: '100%', backgroundColor: 'var(--bg)', border: '1px solid var(--border-strong)', borderRadius: '12px', padding: '12px 14px', color: 'var(--text)', fontSize: '16px', outline: 'none', boxSizing: 'border-box', marginTop: '6px' };
+      const rotulo = { fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' };
+      const linkBotao = { background: 'none', border: 'none', color: 'var(--accent-text)', fontWeight: '700', fontSize: '13px', cursor: 'pointer', padding: '4px' };
+
+      return (
+        <div style={{ minHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 16px', backgroundColor: 'var(--bg)', boxSizing: 'border-box' }}>
+          <div style={{ width: '100%', maxWidth: '400px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', textAlign: 'center' }}>
+              <img src="./logo.png" alt="Logo EddFinança" width="72" height="72" style={{ borderRadius: '20px', boxShadow: '0 10px 24px rgba(59, 41, 152, 0.3)' }} />
+              <h1 style={{ margin: 0, fontSize: '26px', fontWeight: '800', color: 'var(--text-strong)' }}>EddFinança</h1>
+              <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-muted)' }}>
+                {modo === 'criar' ? 'Crie sua conta para guardar suas finanças com segurança.' : modo === 'esqueci' ? 'Vamos te mandar um link para criar uma senha nova.' : 'Entre para ver suas finanças em qualquer aparelho.'}
+              </p>
+            </div>
+
+            {estado === 'carregando' ? (
+              <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>Abrindo…</p>
+            ) : (
+              <div style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '20px', padding: '22px', display: 'flex', flexDirection: 'column', gap: '14px', boxShadow: '0 20px 40px -20px rgba(0,0,0,0.35)' }}>
+                {estado === 'sem-internet' && (
+                  <div role="alert" style={{ backgroundColor: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.4)', color: 'var(--c-amber)', borderRadius: '10px', padding: '10px 12px', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                    <span>Sem internet. Conecte-se para entrar pela primeira vez neste aparelho.</span>
+                    <button type="button" onClick={aoTentarDeNovo} style={{ ...linkBotao, color: 'var(--c-amber)' }}>Tentar de novo</button>
+                  </div>
+                )}
+                {(erro || avisoMostrar) && <div role="alert" style={{ backgroundColor: 'rgba(244,63,94,0.12)', color: 'var(--danger-text)', padding: '10px 12px', borderRadius: '10px', fontSize: '13px' }}>{erro || avisoMostrar}</div>}
+                {aviso && <div role="status" style={{ backgroundColor: 'rgba(var(--accent-rgb), 0.12)', color: 'var(--accent-text)', padding: '10px 12px', borderRadius: '10px', fontSize: '13px' }}>{aviso}</div>}
+
+                {modo !== 'esqueci' && (
+                  <React.Fragment>
+                    <button type="button" disabled={ocupado} onClick={() => { setAvisoExternoLido(true); rodar(aoGoogle); }} style={{ width: '100%', padding: '13px 14px', borderRadius: '12px', border: '1px solid var(--border-strong)', backgroundColor: 'var(--surface)', color: 'var(--text-strong)', fontWeight: '700', fontSize: '15px', cursor: ocupado ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
+                      <span style={{ fontWeight: '900', fontSize: '18px', color: '#4285F4' }}>G</span> {modo === 'criar' ? 'Criar conta com Google' : 'Entrar com Google'}
+                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-faint)', fontSize: '12px' }}>
+                      <span style={{ flex: 1, height: '1px', backgroundColor: 'var(--border)' }} /> ou com e-mail <span style={{ flex: 1, height: '1px', backgroundColor: 'var(--border)' }} />
+                    </div>
+                  </React.Fragment>
+                )}
+
+                <form onSubmit={enviar} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {modo === 'criar' && (
+                    <React.Fragment>
+                      <div>
+                        <label htmlFor="login-nome" style={rotulo}>Nome completo</label>
+                        <input id="login-nome" type="text" autoComplete="name" value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Maria da Silva" maxLength={60} style={campo} />
+                      </div>
+                      <div>
+                        <label htmlFor="login-idade" style={rotulo}>Idade</label>
+                        <input id="login-idade" type="number" inputMode="numeric" min="13" max="120" value={idade} onChange={e => setIdade(e.target.value)} placeholder="Ex.: 32" style={campo} />
+                      </div>
+                    </React.Fragment>
+                  )}
+                  <div>
+                    <label htmlFor="login-email" style={rotulo}>E-mail</label>
+                    <input id="login-email" type="email" inputMode="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="voce@exemplo.com" style={campo} />
+                  </div>
+                  {modo !== 'esqueci' && (
+                    <div>
+                      <label htmlFor="login-senha" style={rotulo}>{modo === 'criar' ? 'Crie uma senha (mínimo 6 caracteres)' : 'Senha'}</label>
+                      <div style={{ position: 'relative' }}>
+                        <input id="login-senha" type={verSenha ? 'text' : 'password'} autoComplete={modo === 'criar' ? 'new-password' : 'current-password'} value={senha} onChange={e => setSenha(e.target.value)} style={{ ...campo, paddingRight: '64px' }} />
+                        <button type="button" onClick={() => setVerSenha(!verSenha)} aria-label={verSenha ? 'Esconder senha' : 'Mostrar senha'} style={{ ...linkBotao, position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-40%)', fontSize: '12px', color: 'var(--text-muted)' }}>{verSenha ? 'Esconder' : 'Mostrar'}</button>
+                      </div>
+                    </div>
+                  )}
+                  <button type="submit" disabled={ocupado} style={{ width: '100%', background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%)', color: 'var(--on-accent)', padding: '13px 16px', borderRadius: '12px', fontWeight: 'bold', fontSize: '15px', border: 'none', cursor: ocupado ? 'wait' : 'pointer', opacity: ocupado ? 0.7 : 1 }}>
+                    {ocupado ? 'Aguarde…' : modo === 'criar' ? 'Criar conta' : modo === 'esqueci' ? 'Enviar link' : 'Entrar'}
+                  </button>
+                </form>
+
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', fontSize: '13px', color: 'var(--text-muted)' }}>
+                  {modo === 'entrar' && <button type="button" onClick={() => trocarModo('esqueci')} style={{ ...linkBotao, color: 'var(--text-muted)', fontWeight: '600' }}>Esqueci a senha</button>}
+                  {modo === 'entrar'
+                    ? <span>Ainda não tem conta? <button type="button" onClick={() => trocarModo('criar')} style={linkBotao}>Criar conta</button></span>
+                    : <span>{modo === 'criar' ? 'Já tem conta?' : 'Lembrou a senha?'} <button type="button" onClick={() => trocarModo('entrar')} style={linkBotao}>Entrar</button></span>}
+                </div>
+              </div>
+            )}
+
+            <p style={{ margin: 0, textAlign: 'center', fontSize: '11px', color: 'var(--text-faint)' }}>
+              Seus dados ficam guardados na sua conta e só você tem acesso a eles. {modo === 'criar' ? 'Ao criar a conta, você concorda com a ' : ''}<a href="./privacidade.html" style={{ color: 'var(--accent-text)', fontWeight: '600' }}>Política de Privacidade</a>.
+            </p>
+          </div>
         </div>
       );
     }
