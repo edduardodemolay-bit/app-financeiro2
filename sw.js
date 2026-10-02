@@ -1,6 +1,6 @@
 // Service worker: deixa o app abrir offline depois da primeira visita.
 // Para forçar atualização depois de mudar o site, troque o número da versão abaixo.
-const VERSAO = 'edd-financas-v19';
+const VERSAO = 'edd-financas-v20';
 const BASE = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
