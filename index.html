@@ -75,6 +75,12 @@
       .app-root { height: 100dvh !important; }
     }
     button { -webkit-tap-highlight-color: transparent; }
+    /* Barra de rolagem do menu lateral: fina, sempre visível quando há mais itens, nas cores do tema */
+    .menu-lateral { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; scrollbar-gutter: stable; }
+    .menu-lateral::-webkit-scrollbar { width: 8px; }
+    .menu-lateral::-webkit-scrollbar-track { background: transparent; }
+    .menu-lateral::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; border: 2px solid var(--surface); }
+    .menu-lateral::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
     @media (max-width: 767px) {
       /* 16px evita o zoom automático do iPhone ao tocar nos campos */
       input, select, textarea { font-size: 16px !important; }
@@ -2362,7 +2368,7 @@
 
       const estilos = {
         container: { display: 'flex', height: '100vh', backgroundColor: 'var(--bg)', color: 'var(--text)', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' },
-        sidebar: { width: '270px', backgroundColor: 'var(--surface)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '24px' },
+        sidebar: { width: '270px', flexShrink: 0, backgroundColor: 'var(--surface)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '24px', padding: '24px', overflowY: 'auto', overscrollBehavior: 'contain' },
         main: { flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' },
         header: { height: '80px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 32px', backgroundColor: 'var(--surface)', position: 'sticky', top: 0, zIndex: 20 },
         card: { backgroundColor: 'var(--card)', border: '1px solid var(--border)', borderRadius: '16px', padding: isMobile ? '16px' : '24px', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)' },
@@ -2494,7 +2500,7 @@
             <div onClick={() => setMenuAberto(false)} style={{ position: 'fixed', inset: 0, backgroundColor: 'var(--overlay)', zIndex: 55 }} />
           )}
 
-          <aside style={isMobile ? {
+          <aside className="menu-lateral" style={isMobile ? {
             ...estilos.sidebar,
             position: 'fixed', top: 0, left: 0, bottom: 0, width: '280px', maxWidth: '85vw', zIndex: 60,
             overflowY: 'auto', gap: '24px',
