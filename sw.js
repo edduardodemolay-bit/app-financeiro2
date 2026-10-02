@@ -1,6 +1,6 @@
 // Service worker: deixa o app abrir offline depois da primeira visita.
 // Para forçar atualização depois de mudar o site, troque o número da versão abaixo.
-const VERSAO = 'edd-financas-v16';
+const VERSAO = 'edd-financas-v13';
 const BASE = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -17,10 +17,8 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
-  // Login e banco na nuvem nunca passam pelo cache.
-  // (Os arquivos do Firebase em gstatic.com/firebasejs têm versão fixa e podem ficar guardados,
-  //  assim quem já entrou consegue abrir o app sem internet.)
-  if (/googleapis\.com|firebaseapp\.com/.test(e.request.url)) return;
+  // Login do Google e banco na nuvem nunca passam pelo cache
+  if (/googleapis\.com|firebaseapp\.com|gstatic\.com\/firebasejs/.test(e.request.url)) return;
 
   // A página do app busca primeiro na internet (assim a versão nova aparece na hora)
   // e só usa a cópia guardada quando estiver sem conexão.

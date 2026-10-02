@@ -1,11 +1,51 @@
 rules_version = '2';
-// Regras do banco na nuvem (Firestore) do EddFinança.
-// Cada pessoa só lê e grava o próprio documento: usuarios/{id-da-conta-google}.
+// Regras de acesso da nuvem (Firestore) do EddFinança.
+//
+//  usuarios/{id}  -> espaço individual de cada conta (lançamentos, metas, planejamento, histórico).
+//                    Só a própria pessoa lê e grava. Nem o administrador vê.
+//  acessos/{id}   -> cadastro e acessos de cada conta (nome completo, e-mail, idade, datas).
+//                    A pessoa cria o seu; o administrador vê todos e pode bloquear/liberar.
+//  admins/{id}    -> quem é administrador. Só se cria pelo console do Firebase.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /usuarios/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+    function logado() { return request.auth != null; }
+    function dono(uid) { return logado() && request.auth.uid == uid; }
+    function ehAdmin() { return logado() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    function bloqueado(uid) {
+      return exists(/databases/$(database)/documents/acessos/$(uid))
+        && get(/databases/$(database)/documents/acessos/$(uid)).data.get('bloqueado', false) == true;
     }
+
+    // Espaço individual: só o dono, e só se o acesso não estiver bloqueado
+    match /usuarios/{uid} {
+      allow read: if dono(uid) && !bloqueado(uid);
+      allow create, update: if dono(uid) && !bloqueado(uid);
+      allow delete: if false;
+    }
+
+    // Cadastro e acessos
+    match /acessos/{uid} {
+      allow read: if dono(uid) || ehAdmin();
+      // Criar o próprio cadastro: com o e-mail da própria conta e sem se bloquear/desbloquear
+      allow create: if dono(uid)
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.get('bloqueado', false) == false
+        && (!('idade' in request.resource.data) || (request.resource.data.idade is int && request.resource.data.idade >= 13 && request.resource.data.idade <= 120));
+      // A pessoa atualiza os próprios acessos, mas não muda o bloqueio nem a data de criação.
+      // O administrador só mexe no bloqueio.
+      allow update: if (dono(uid)
+          && request.resource.data.get('bloqueado', false) == resource.data.get('bloqueado', false)
+          && request.resource.data.criadoEm == resource.data.criadoEm)
+        || (ehAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['bloqueado', 'bloqueadoEm', 'bloqueadoPor']));
+      allow delete: if false;
+    }
+
+    // Administradores: cada um só confere a si mesmo; ninguém cria pelo app
+    match /admins/{uid} {
+      allow read: if dono(uid);
+      allow write: if false;
+    }
+
     // Qualquer outra coleção fica fechada
     match /{documento=**} {
       allow read, write: if false;
