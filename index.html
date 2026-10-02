@@ -169,6 +169,10 @@
     let cadastroPendente = null;
 
     // ===== CONTA GOOGLE + CÓPIA NA NUVEM (Firebase / Google Cloud) =====
+    // Número do WhatsApp do app, só dígitos com 55 e DDD (ex.: '5511999999999').
+    // Enquanto for null, a parte do WhatsApp não aparece no menu.
+    const WHATSAPP_NUMERO = null;
+
     // Projeto "EddFinanca" no Firebase. Estes valores não são segredo: eles identificam o projeto.
     // Quem protege os dados são as regras do Firestore (firestore.rules): cada conta só vê os próprios dados.
     const FIREBASE_CONFIG = {
@@ -451,6 +455,12 @@
       if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
       else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
       return s === '' ? NaN : Number(s);
+    };
+    // '5511988887777' -> '(11) 98888-7777'
+    const formatarTelefone = (tel) => {
+      const d = String(tel || '').replace(/\D/g, '').replace(/^55/, '');
+      if (d.length < 10) return d;
+      return '(' + d.slice(0, 2) + ') ' + d.slice(2, d.length - 4) + '-' + d.slice(-4);
     };
     const valorParaCampo = (n) => (n === '' || n == null ? '' : String(n).replace('.', ','));
 
@@ -990,6 +1000,7 @@
       // Apaga deste aparelho os dados da conta (ao sair ou ao trocar de conta)
       const limparAparelho = () => {
         fecharEscutasEspaco();
+        fecharEscutasConta(); setWhatsappLigado(null); setCodigoWhatsapp(null);
         espacoAtivoRef.current = null; setEspacoAtivoEstado(null); espacoServidorRef.current = null; setEspacos([]);
         try { Object.keys(localStorage).filter(k => k.startsWith('@finapp_espaco_cache:')).forEach(k => localStorage.removeItem(k)); } catch (e) {}
         Object.values(CHAVES_LOCAIS).forEach(k => gravarChave(k, null));
@@ -1248,7 +1259,7 @@
           fb.auth().languageCode = 'pt-BR';
           fb.auth().getRedirectResult().catch(() => {});
           fb.auth().onAuthStateChanged(async (user) => {
-            if (!user) { nuvemRef.current = null; setUsuarioNuvem(null); setStatusNuvem('saiu'); setEhAdmin(false); setAcessos(null); setEstadoLogin('fora'); return; }
+            if (!user) { fecharEscutasConta(); setWhatsappLigado(null); setCodigoWhatsapp(null); nuvemRef.current = null; setUsuarioNuvem(null); setStatusNuvem('saiu'); setEhAdmin(false); setAcessos(null); setEstadoLogin('fora'); return; }
             const db = fb.firestore();
             const perfil = { uid: user.uid, nome: user.displayName || user.email, email: user.email, foto: user.photoURL };
             setStatusNuvem('conectando');
@@ -1293,6 +1304,8 @@
             nuvemRef.current = { fb, doc, nome: perfil.nome, email: perfil.email };
             setEstadoLogin('dentro');
             await sincronizar();
+            // Lançamentos que chegaram pelo WhatsApp (depois da primeira sincronização, para não gerar conflito)
+            ligarEscutasConta(fb, user.uid);
             // Gestões compartilhadas: reabre a que estava aberta (se a pessoa ainda participa)
             const lista = await carregarEspacos();
             const salvo = espacoAtivoRef.current;
@@ -1443,6 +1456,11 @@
               else await db.collection('espacos').doc(esp.id).update({ ['membros.' + usuario.uid]: sessao.fb.firestore.FieldValue.delete(), ['nomes.' + usuario.uid]: sessao.fb.firestore.FieldValue.delete() });
             } catch (e) { console.error('Gestão ao excluir conta:', e); }
           }
+          // WhatsApp: desliga o número e esvazia a caixa de entrada
+          fecharEscutasConta();
+          if (whatsappLigado) await db.collection('whatsappNumeros').doc(whatsappLigado).delete().catch(() => {});
+          const caixaWpp = await db.collection('usuarios').doc(usuario.uid).collection('whatsapp').get().catch(() => null);
+          if (caixaWpp) for (const d of caixaWpp.docs) await d.ref.delete().catch(() => {});
           await db.collection('perfis').doc(usuario.uid).delete().catch(() => {});
           await sessao.doc.delete();
           await db.collection('acessos').doc(usuario.uid).delete().catch(() => {});
@@ -1457,6 +1475,118 @@
         }
         limparAparelho();
         exibirNotificacao('Sua conta e todos os seus dados foram excluídos');
+      };
+
+      // ===== WHATSAPP =====
+      // A pessoa liga o número dela à conta mandando "LIGAR 123456" para o WhatsApp do app.
+      // O que ela manda vira lançamento: na gestão compartilhada o servidor grava direto;
+      // na pessoal ele deixa numa caixa de entrada (usuarios/{id}/whatsapp) que o app puxa aqui.
+      const [whatsappLigado, setWhatsappLigado] = useState(null);   // número ligado ou null
+      const [codigoWhatsapp, setCodigoWhatsapp] = useState(null);   // { codigo, expira } enquanto espera a mensagem
+      const escutasContaRef = useRef([]);
+      const fecharEscutasConta = () => {
+        escutasContaRef.current.forEach(parar => { try { parar(); } catch (e) {} });
+        escutasContaRef.current = [];
+      };
+      useEffect(() => () => fecharEscutasConta(), []);
+
+      // Junta na gestão pessoal os lançamentos que chegaram pelo WhatsApp
+      const importandoWppRef = useRef(false);
+      const importarDoWhatsapp = async (docs) => {
+        const sessao = nuvemRef.current;
+        if (!sessao || !docs.length) return;
+        if (importandoWppRef.current) { pendenteWppRef.current = true; return; }
+        importandoWppRef.current = true;
+        try {
+          const db = sessao.fb.firestore();
+          const chegaram = [];
+          for (const d of docs) {
+            // Só um aparelho pega cada item: quem conseguir apagar da caixa de entrada é quem lança
+            const item = await db.runTransaction(async (tx) => {
+              const s = await tx.get(d.ref);
+              if (!s.exists) return null;
+              tx.delete(d.ref);
+              return s.data();
+            }).catch(() => null);
+            if (item && item.transacao) chegaram.push(item.transacao);
+          }
+          const limpas = limparTransacoes(chegaram).validas;
+          if (!limpas.length) return;
+          const local = lerLocal();
+          const ja = new Set((local.transacoes || []).map(t => t.wppId).filter(Boolean));
+          const novas = limpas.filter(t => !ja.has(t.wppId));
+          if (!novas.length) return;
+          const transacoesNovas = [...novas, ...(local.transacoes || [])].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+          const agoraIso = new Date().toISOString();
+          const hist = [...novas.map((t, i) => ({ id: Date.now() + '-wpp' + i, quando: agoraIso, quem: t.autor || nomeAutor, acao: 'Lançou pelo WhatsApp', detalhe: t.description + ' · ' + formatarMoeda(t.amount) + ' · ' + t.category })), ...(local.historico || [])].slice(0, 500);
+          const novo = { ...local, transacoes: transacoesNovas, historico: hist };
+          gravarLocal(novo);
+          gravarChave(CHAVE_VERSAO_LOCAL, novaVersao());
+          if (!espacoAtivoRef.current) aplicarDados(novo);
+          enviarParaNuvem();
+          exibirNotificacao(novas.length === 1 ? '📲 Chegou pelo WhatsApp: ' + novas[0].description + ' · ' + formatarMoeda(novas[0].amount) : '📲 ' + novas.length + ' lançamentos chegaram pelo WhatsApp');
+        } catch (e) {
+          console.error('WhatsApp:', e);
+        } finally {
+          importandoWppRef.current = false;
+          // Chegou mais coisa enquanto este lote era lançado: confere a caixa de novo
+          if (pendenteWppRef.current && caixaWppRef.current) {
+            pendenteWppRef.current = false;
+            caixaWppRef.current.get().then(s => importarDoWhatsapp(s.docs)).catch(() => {});
+          }
+        }
+      };
+      const pendenteWppRef = useRef(false);
+      const caixaWppRef = useRef(null);
+
+      // Escuta o número ligado e a caixa de entrada desta conta
+      const ligarEscutasConta = (fb, uid) => {
+        fecharEscutasConta();
+        if (!WHATSAPP_NUMERO) return;
+        const db = fb.firestore();
+        escutasContaRef.current.push(db.collection('perfis').doc(uid).onSnapshot(s => {
+          const tel = s.exists && s.data().whatsapp ? s.data().whatsapp.tel : null;
+          setWhatsappLigado(tel || null);
+          if (tel) setCodigoWhatsapp(atual => { if (atual) exibirNotificacao('✅ WhatsApp ligado à sua conta'); return null; });
+        }, () => {}));
+        caixaWppRef.current = db.collection('usuarios').doc(uid).collection('whatsapp');
+        escutasContaRef.current.push(caixaWppRef.current.onSnapshot(s => {
+          if (s.docs.length) importarDoWhatsapp(s.docs);
+        }, () => {}));
+      };
+
+      const ligarWhatsapp = async () => {
+        const sessao = nuvemRef.current;
+        if (!sessao) { exibirNotificacao('Sem conexão com a conta. Tente de novo.'); return; }
+        try {
+          const uid = sessao.fb.auth().currentUser.uid;
+          const n = new Uint32Array(1);
+          (window.crypto || window.msCrypto).getRandomValues(n);
+          const codigo = String(100000 + (n[0] % 900000));
+          const expira = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+          if (codigoWhatsapp) sessao.fb.firestore().collection('vinculosWhatsapp').doc(codigoWhatsapp.codigo).delete().catch(() => {});
+          await sessao.fb.firestore().collection('vinculosWhatsapp').doc(codigo).set({ uid, nome: nomeAutor, criadoEm: new Date().toISOString(), expira });
+          setCodigoWhatsapp({ codigo, expira });
+        } catch (e) {
+          console.error(e);
+          exibirNotificacao('Não foi possível gerar o código. Confira a internet e tente de novo.');
+        }
+      };
+
+      const desligarWhatsapp = async () => {
+        const sessao = nuvemRef.current;
+        if (!sessao || !whatsappLigado) return;
+        if (!window.confirm('Desligar o WhatsApp ' + formatarTelefone(whatsappLigado) + ' da sua conta?\n\nAs mensagens desse número deixam de virar lançamentos.')) return;
+        try {
+          const db = sessao.fb.firestore();
+          const uid = sessao.fb.auth().currentUser.uid;
+          await db.collection('whatsappNumeros').doc(whatsappLigado).delete().catch(() => {});
+          await db.collection('perfis').doc(uid).set({ whatsapp: sessao.fb.firestore.FieldValue.delete() }, { merge: true });
+          exibirNotificacao('WhatsApp desligado da conta');
+        } catch (e) {
+          console.error(e);
+          exibirNotificacao('Não foi possível desligar. Tente de novo.');
+        }
       };
 
       // Anota uma ação no histórico e devolve a lista nova (para salvar junto)
@@ -2283,6 +2413,7 @@
             {meta && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(168, 85, 247, 0.15)', color: 'var(--c-purple)', fontWeight: '700' }}>→ Meta: {meta.nome}</span>}
             {t.exemplo && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--c-sky)', color: 'var(--c-sky)', fontWeight: '700', textTransform: 'uppercase' }}>Exemplo</span>}
             {t.repeticao && <span title="Lançamento que se repete" style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Repeat size={11} /> {t.repeticao}</span>}
+            {t.viaWhatsapp && <span title="Lançado por mensagem no WhatsApp" style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(37, 211, 102, 0.15)', color: '#15803d', fontWeight: '700' }}>📲 WhatsApp</span>}
             {t.autor && <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>por {t.autor}</span>}
           </React.Fragment>
         );
@@ -2511,6 +2642,35 @@
                   </div>
                 );
               })()}
+
+              {usuarioNuvem && WHATSAPP_NUMERO && (
+                <div style={{ marginTop: '14px', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: 'var(--text)' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>📲 WhatsApp</span>
+                  {whatsappLigado ? (
+                    <React.Fragment>
+                      <span>Ligado: <strong>{formatarTelefone(whatsappLigado)}</strong></span>
+                      <span style={{ color: 'var(--text-muted)' }}>Mande para <strong>{formatarTelefone(WHATSAPP_NUMERO)}</strong> frases como "gastei 46 na padaria". Para uma gestão compartilhada: "casa: gastei 50 no mercado".</span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <a href={'https://wa.me/' + WHATSAPP_NUMERO} target="_blank" rel="noopener" style={{ flex: 1, textAlign: 'center', textDecoration: 'none', backgroundColor: '#25D366', color: '#ffffff', borderRadius: '10px', padding: '8px 10px', fontWeight: '700' }}>Abrir conversa</a>
+                        <button onClick={desligarWhatsapp} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text-muted)', borderRadius: '10px', padding: '8px 10px', fontWeight: '600', fontSize: '12px', cursor: 'pointer' }}>Desligar</button>
+                      </div>
+                    </React.Fragment>
+                  ) : codigoWhatsapp ? (
+                    <React.Fragment>
+                      <span>Mande esta mensagem para <strong>{formatarTelefone(WHATSAPP_NUMERO)}</strong> do WhatsApp que você quer usar:</span>
+                      <strong style={{ fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '16px', textAlign: 'center', backgroundColor: 'var(--surface)', border: '1px dashed #25D366', borderRadius: '10px', padding: '8px' }}>LIGAR {codigoWhatsapp.codigo}</strong>
+                      <a href={'https://wa.me/' + WHATSAPP_NUMERO + '?text=' + encodeURIComponent('LIGAR ' + codigoWhatsapp.codigo)} target="_blank" rel="noopener" style={{ textAlign: 'center', textDecoration: 'none', backgroundColor: '#25D366', color: '#ffffff', borderRadius: '10px', padding: '9px 10px', fontWeight: '700' }}>Abrir o WhatsApp com a mensagem</a>
+                      <span style={{ color: 'var(--text-faint)', fontSize: '11px' }}>O código vale 15 minutos. Quando a mensagem chegar, este quadro muda sozinho.</span>
+                      <button onClick={() => { const c = codigoWhatsapp.codigo; setCodigoWhatsapp(null); if (nuvemRef.current) nuvemRef.current.fb.firestore().collection('vinculosWhatsapp').doc(c).delete().catch(() => {}); }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontWeight: '600', fontSize: '12px', cursor: 'pointer', padding: 0 }}>Cancelar</button>
+                    </React.Fragment>
+                  ) : (
+                    <React.Fragment>
+                      <span style={{ color: 'var(--text-muted)' }}>Lance mandando mensagem no WhatsApp, como "gastei 46 na padaria".</span>
+                      <button onClick={ligarWhatsapp} style={{ backgroundColor: '#25D366', color: '#ffffff', border: 'none', borderRadius: '10px', padding: '9px 10px', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>Ligar meu WhatsApp</button>
+                    </React.Fragment>
+                  )}
+                </div>
+              )}
 
               <div style={{ marginTop: '22px' }}>
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 8px 0', fontWeight: '600', textTransform: 'uppercase' }}>Aparência</p>
