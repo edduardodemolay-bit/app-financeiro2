@@ -169,8 +169,6 @@
     let cadastroPendente = null;
 
     // ===== CONTA GOOGLE + CÓPIA NA NUVEM (Firebase / Google Cloud) =====
-    // Desligado enquanto estiver null. Para ligar, crie o projeto no Firebase e cole aqui a
-    // configuração do app da Web (passo a passo em COMO-ATIVAR-LOGIN.txt).
     // Projeto "EddFinanca" no Firebase. Estes valores não são segredo: eles identificam o projeto.
     // Quem protege os dados são as regras do Firestore (firestore.rules): cada conta só vê os próprios dados.
     const FIREBASE_CONFIG = {
@@ -291,6 +289,16 @@
       const cfgAntes = JSON.stringify({ limitesCategorias: antes.limitesCategorias || {}, categoriasExtras: antes.categoriasExtras || {} });
       const cfgDepois = JSON.stringify({ limitesCategorias: depois.limitesCategorias || {}, categoriasExtras: depois.categoriasExtras || {} });
       return { gravar, apagar, config: cfgAntes !== cfgDepois ? JSON.parse(cfgDepois) : null };
+    }
+    // Apaga da nuvem uma gestão compartilhada inteira (só o dono consegue: as regras garantem)
+    async function apagarGestaoNaNuvem(db, esp) {
+      const base = db.collection('espacos').doc(esp.id);
+      for (const col of [...COLECOES_ESPACO, 'config']) {
+        const docs = (await base.collection(col).get()).docs;
+        for (let i = 0; i < docs.length; i += 400) { const lote = db.batch(); docs.slice(i, i + 400).forEach(d => lote.delete(d.ref)); await lote.commit(); }
+      }
+      if (esp.codigo) await db.collection('convites').doc(esp.codigo).delete().catch(() => {});
+      await base.delete();
     }
 
     // Baixa um arquivo de backup (usado antes de descartar um dos lados num conflito)
@@ -1184,7 +1192,7 @@
           const codigo = gerarCodigoConvite();
           const agora = new Date().toISOString();
           await db.collection('convites').doc(codigo).set({ espaco: esp.id, nomeEspaco: esp.nome, nomeDono: nomeAutor, criadoPor: uid, ativo: true, criadoEm: agora });
-          if (esp.codigo) await db.collection('convites').doc(esp.codigo).set({ ativo: false }, { merge: true }).catch(() => {});
+          if (esp.codigo) await db.collection('convites').doc(esp.codigo).delete().catch(() => {});
           await db.collection('espacos').doc(esp.id).update({ codigo });
           await carregarEspacos();
           exibirNotificacao('Código novo: ' + codigo);
@@ -1203,14 +1211,8 @@
         try {
           const db = sessao.fb.firestore();
           const uid = sessao.fb.auth().currentUser.uid;
-          const base = db.collection('espacos').doc(esp.id);
           if (espacoAtivoRef.current && espacoAtivoRef.current.id === esp.id) abrirEspaco(null);
-          for (const col of [...COLECOES_ESPACO, 'config']) {
-            const docs = (await base.collection(col).get()).docs;
-            for (let i = 0; i < docs.length; i += 400) { const lote = db.batch(); docs.slice(i, i + 400).forEach(d => lote.delete(d.ref)); await lote.commit(); }
-          }
-          if (esp.codigo) await db.collection('convites').doc(esp.codigo).delete().catch(() => {});
-          await base.delete();
+          await apagarGestaoNaNuvem(db, esp);
           await db.collection('perfis').doc(uid).set({ espacos: sessao.fb.firestore.FieldValue.arrayRemove(esp.id) }, { merge: true });
           try { localStorage.removeItem(chaveCacheEspaco(esp.id)); } catch (e) {}
           await carregarEspacos();
@@ -1419,7 +1421,7 @@
       const excluirConta = async () => {
         const sessao = nuvemRef.current;
         if (!sessao) return;
-        if (!window.confirm('Excluir a sua conta e TODOS os seus dados?\n\nSeus lançamentos, metas, contas fixas e histórico serão apagados da nuvem e deste aparelho. Não dá para desfazer.\n\nDica: se quiser guardar uma cópia, cancele e use antes "Exportar backup".')) return;
+        if (!window.confirm('Excluir a sua conta e TODOS os seus dados?\n\nSeus lançamentos, metas, contas fixas e histórico serão apagados da nuvem e deste aparelho. As gestões compartilhadas que você criou também são apagadas (para todos); das outras, você sai. Não dá para desfazer.\n\nDica: se quiser guardar uma cópia, cancele e use antes "Exportar backup".')) return;
         if (!window.confirm('Última confirmação: apagar tudo agora?')) return;
         const usuario = sessao.fb.auth().currentUser;
         if (!usuario) return;
@@ -1432,8 +1434,18 @@
         clearTimeout(timerNuvem.current); timerNuvem.current = null;
         nuvemRef.current = null; // para de sincronizar antes de apagar
         try {
+          const db = sessao.fb.firestore();
+          fecharEscutasEspaco();
+          // Gestões compartilhadas: as que a pessoa criou são apagadas; das outras, ela só sai
+          for (const esp of espacos) {
+            try {
+              if (esp.papel === 'dono') await apagarGestaoNaNuvem(db, esp);
+              else await db.collection('espacos').doc(esp.id).update({ ['membros.' + usuario.uid]: sessao.fb.firestore.FieldValue.delete(), ['nomes.' + usuario.uid]: sessao.fb.firestore.FieldValue.delete() });
+            } catch (e) { console.error('Gestão ao excluir conta:', e); }
+          }
+          await db.collection('perfis').doc(usuario.uid).delete().catch(() => {});
           await sessao.doc.delete();
-          await sessao.fb.firestore().collection('acessos').doc(usuario.uid).delete().catch(() => {});
+          await db.collection('acessos').doc(usuario.uid).delete().catch(() => {});
           await usuario.delete();
         } catch (e) {
           try { await sessao.fb.auth().signOut(); } catch (e2) {}
@@ -2191,7 +2203,9 @@
           try {
             const d = JSON.parse(leitor.result);
             if (!d || !Array.isArray(d.transacoes)) throw new Error('formato invalido');
-            if (!window.confirm('Isso vai substituir os dados atuais deste aparelho. Continuar?')) return;
+            if (!window.confirm(espacoAtivoRef.current
+              ? 'Isso vai substituir os dados da gestão compartilhada "' + espacoAtivoRef.current.nome + '" para todos que participam dela. Continuar?'
+              : 'Isso vai substituir os dados atuais da sua gestão pessoal. Continuar?')) return;
             const limites = d.limitesCategorias ? { ...limitesCategorias, ...d.limitesCategorias } : limitesCategorias;
             const novasMetas = Array.isArray(d.metas) ? d.metas.map(normalizarMeta) : metas;
             const novosRecorrentes = Array.isArray(d.recorrentes) ? d.recorrentes.filter(r => r && /^\d{4}-\d{2}$/.test(String(r.inicio))) : [];
@@ -2327,7 +2341,9 @@
             <div style={{
               position: 'fixed',
               top: '20px',
-              right: '20px',
+              right: isMobile ? '12px' : '20px',
+              left: isMobile ? '12px' : 'auto',
+              maxWidth: isMobile ? 'none' : '480px',
               backgroundColor: 'var(--accent)',
               color: 'var(--on-accent)',
               padding: '12px 20px',
@@ -2339,7 +2355,7 @@
               alignItems: 'center',
               gap: '10px'
             }}>
-              <CheckCircle2 size={18} /> {mensagemNotificacao}
+              <CheckCircle2 size={18} style={{ flexShrink: 0 }} /> <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{mensagemNotificacao}</span>
             </div>
           )}
 
@@ -2798,13 +2814,13 @@
                         {transacoesDoMes.slice(0, 5).map(t => {
                           const cfg = corDaCategoria(t.category);
                           return (
-                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', padding: '14px 18px', borderRadius: '12px' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                                <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', backgroundColor: 'var(--bg)', border: '1px solid var(--border)', padding: isMobile ? '12px' : '14px 18px', borderRadius: '12px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '10px' : '14px', minWidth: 0 }}>
+                                {!isMobile && <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
                                   {renderIconeTipo(t.type)}
-                                </div>
-                                <div>
-                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px' }}>{t.description}</p>
+                                </div>}
+                                <div style={{ minWidth: 0 }}>
+                                  <p style={{ margin: '0 0 4px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px', overflowWrap: 'anywhere' }}>{t.description}</p>
                                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
                                     <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type), fontWeight: '700', textTransform: 'uppercase' }}>
@@ -2816,7 +2832,7 @@
                                   </div>
                                 </div>
                               </div>
-                              <span style={{ fontWeight: 'bold', fontSize: '15px', color: renderCorTipo(t.type) }}>
+                              <span style={{ fontWeight: 'bold', fontSize: '15px', color: renderCorTipo(t.type), whiteSpace: 'nowrap', flexShrink: 0 }}>
                                 {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
                               </span>
                             </div>
@@ -3389,13 +3405,13 @@
                         {transacoesDiaSelecionado.map(t => {
                           const cfg = corDaCategoria(t.category);
                           return (
-                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'var(--bg)', padding: '12px 16px', borderRadius: '12px', border: '1px solid var(--border)' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <div style={{ padding: '8px', borderRadius: '8px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
+                            <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', backgroundColor: 'var(--bg)', padding: isMobile ? '10px 12px' : '12px 16px', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                                {!isMobile && <div style={{ padding: '8px', borderRadius: '8px', backgroundColor: renderBgTipo(t.type), color: renderCorTipo(t.type) }}>
                                   {renderIconeTipo(t.type)}
-                                </div>
-                                <div>
-                                  <p style={{ margin: 0, fontWeight: 'bold', color: 'var(--text-strong)', fontSize: '14px' }}>{t.description}</p>
+                                </div>}
+                                <div style={{ minWidth: 0 }}>
+                                  <p style={{ margin: 0, fontWeight: 'bold', color: 'var(--text-strong)', fontSize: '14px', overflowWrap: 'anywhere' }}>{t.description}</p>
                                   <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
                                 </div>
                               </div>
