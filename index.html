@@ -326,63 +326,139 @@
     // ===== LANÇAMENTO RÁPIDO: entende frases como "gastei 46 na padaria" ou "recebi 3500 de salário" =====
     const semAcento = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
     const PALAVRAS_CATEGORIA = [
-      ['Salário', ['salario', 'holerite', 'pagamento do mes', 'decimo terceiro', 'ferias']],
-      ['Vendas', ['venda', 'vendi', 'vendas', 'cliente pagou', 'encomenda']],
-      ['Moradia', ['aluguel', 'luz', 'energia', 'agua', 'condominio', 'internet', 'gas', 'iptu', 'conta de casa', 'reforma']],
-      ['Alimentação', ['mercado', 'supermercado', 'padaria', 'lanche', 'almoco', 'jantar', 'restaurante', 'ifood', 'comida', 'pizza', 'acougue', 'feira', 'cafe', 'hamburguer', 'lanchonete', 'marmita', 'sorvete']],
-      ['Transporte', ['uber', '99', 'onibus', 'gasolina', 'combustivel', 'metro', 'taxi', 'estacionamento', 'pedagio', 'passagem', 'posto', 'mecanico', 'oficina']],
-      ['Saúde', ['farmacia', 'remedio', 'medico', 'consulta', 'dentista', 'exame', 'academia', 'plano de saude', 'hospital']],
-      ['Educação', ['escola', 'curso', 'faculdade', 'livro', 'mensalidade', 'material escolar', 'apostila']],
-      ['Lazer', ['cinema', 'show', 'bar', 'festa', 'viagem', 'netflix', 'spotify', 'jogo', 'passeio', 'cerveja', 'streaming']]
+      ['Salário', ['salario', 'holerite', 'pagamento do mes', 'decimo terceiro', '13o', 'ferias', 'adiantamento', 'plr', 'bonus', 'comissao']],
+      ['Vendas', ['venda', 'vendi', 'vendas', 'vendeu', 'vendemos', 'cliente pagou', 'encomenda', 'pedido', 'pedidos']],
+      ['Moradia', ['aluguel', 'luz', 'energia', 'agua', 'condominio', 'internet', 'gas', 'botijao', 'iptu', 'conta de casa', 'reforma', 'diarista', 'faxina', 'manutencao', 'conta de celular', 'telefone', 'enel', 'cemig', 'copel', 'sabesp', 'light']],
+      ['Alimentação', ['mercado', 'supermercado', 'mercadinho', 'atacadao', 'assai', 'hortifruti', 'sacolao', 'padaria', 'pao', 'lanche', 'almoco', 'jantar', 'janta', 'cafe da manha', 'restaurante', 'ifood', 'rappi', 'delivery', 'comida', 'pizza', 'acougue', 'carne', 'feira', 'cafe', 'hamburguer', 'lanchonete', 'marmita', 'marmitex', 'sorvete', 'acai', 'salgado', 'pastel', 'coxinha', 'churrasco', 'doce', 'bolo', 'mcdonalds', 'mc donalds', 'burger king', 'refeicao']],
+      ['Transporte', ['uber', '99', 'indrive', 'onibus', 'gasolina', 'etanol', 'diesel', 'combustivel', 'abasteci', 'metro', 'trem', 'brt', 'bilhete unico', 'taxi', 'estacionamento', 'pedagio', 'passagem', 'posto', 'mecanico', 'oficina', 'pneu', 'borracharia', 'lava jato', 'ipva', 'licenciamento', 'multa', 'revisao', 'carro', 'moto']],
+      ['Saúde', ['farmacia', 'drogaria', 'remedio', 'remedios', 'medico', 'consulta', 'dentista', 'exame', 'exames', 'laboratorio', 'academia', 'plano de saude', 'hospital', 'psicologo', 'psicologa', 'terapia', 'fisioterapia', 'vacina', 'otica', 'oculos', 'suplemento', 'whey']],
+      ['Educação', ['escola', 'curso', 'faculdade', 'livro', 'livros', 'mensalidade', 'matricula', 'material escolar', 'caderno', 'uniforme', 'apostila', 'aula', 'aulas', 'ingles', 'vestibular']],
+      ['Lazer', ['cinema', 'show', 'ingresso', 'teatro', 'bar', 'balada', 'festa', 'viagem', 'hotel', 'pousada', 'praia', 'parque', 'netflix', 'spotify', 'prime video', 'globoplay', 'disney', 'hbo', 'youtube premium', 'jogo', 'game', 'playstation', 'xbox', 'steam', 'passeio', 'cerveja', 'streaming']]
     ];
-    const PALAVRAS_RECEITA = ['recebi', 'ganhei', 'entrou', 'caiu', 'vendi', 'venda', 'salario', 'pix recebido', 'me pagou', 'pagaram', 'renda', 'lucro'];
-    const PALAVRAS_DESPESA = ['conta de', 'aluguel', 'luz', 'agua', 'internet', 'condominio', 'mensalidade', 'boleto', 'fatura', 'iptu', 'parcela', 'plano de'];
+    const PALAVRAS_RECEITA = ['recebi', 'recebemos', 'ganhei', 'entrou', 'caiu', 'vendi', 'venda', 'vendeu', 'salario', 'pix recebido', 'me pagou', 'me pagaram', 'pagaram', 'me mandou', 'me mandaram', 'me passou', 'me transferiu', 'me deu', 'me deram', 'depositaram', 'depositou', 'reembolso', 'rendimento', 'rendeu', 'renda', 'lucro', 'comissao', 'freela', 'bico', 'gorjeta', 'cashback', 'adiantamento'];
+    const PALAVRAS_DESPESA = ['conta de', 'aluguel', 'luz', 'agua', 'internet', 'condominio', 'mensalidade', 'boleto', 'fatura', 'iptu', 'ipva', 'parcela', 'prestacao', 'financiamento', 'seguro', 'assinatura', 'plano de'];
     const contemPalavra = (texto, palavra) => new RegExp('(^|[^a-z0-9])' + palavra.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-z0-9])').test(texto);
 
+    // Números falados por extenso viram algarismos: "trinta e cinco reais" -> "35 reais",
+    // "dois mil e quinhentos" -> "2500", "trinta reais e cinquenta centavos" -> "30,50 reais".
+    // (O ditado do celular às vezes escreve os números por extenso.)
+    const NUMEROS_FALADOS = { zero: 0, um: 1, uma: 1, dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, onze: 11, doze: 12, treze: 13, quatorze: 14, catorze: 14, quinze: 15, dezesseis: 16, dezessete: 17, dezoito: 18, dezenove: 19, vinte: 20, trinta: 30, quarenta: 40, cinquenta: 50, sessenta: 60, setenta: 70, oitenta: 80, noventa: 90, cem: 100, cento: 100, duzentos: 200, duzentas: 200, trezentos: 300, trezentas: 300, quatrocentos: 400, quatrocentas: 400, quinhentos: 500, quinhentas: 500, seiscentos: 600, seiscentas: 600, setecentos: 700, setecentas: 700, oitocentos: 800, oitocentas: 800, novecentos: 900, novecentas: 900 };
+    const PALAVRAS_DE_VALOR = ['reais', 'real', 'mil', 'conto', 'contos', 'pila', 'paus', 'centavo', 'centavos'];
+    function numerosPorExtenso(texto) {
+      const partes = String(texto || '').normalize('NFC').split(/(\s+)/);
+      const chave = (p) => semAcento(p).replace(/[^a-z0-9]/g, '');
+      const ehNumero = (k) => k in NUMEROS_FALADOS || k === 'mil';
+      const saida = [];
+      let i = 0;
+      while (i < partes.length) {
+        const k = chave(partes[i]);
+        const anterior = saida.length >= 2 ? chave(saida[saida.length - 2]) : '';
+        // "2 mil" fica como está (o "mil" depois de algarismo é lido mais adiante)
+        if (!ehNumero(k) || (k === 'mil' && /^\d/.test(anterior))) { saida.push(partes[i]); i++; continue; }
+        let total = 0, atual = 0, palavras = 0, ultimo = i;
+        for (let j = i; j < partes.length; j++) {
+          const kj = chave(partes[j]);
+          if (kj === 'mil') { total += (atual || 1) * 1000; atual = 0; }
+          else if (kj in NUMEROS_FALADOS) atual += NUMEROS_FALADOS[kj];
+          else if ((kj === 'e' && j > i) || partes[j].trim() === '') continue;
+          else break;
+          palavras++; ultimo = j;
+        }
+        // "um"/"uma" sozinho é artigo ("comprei um lanche"), a não ser que venha "real", "mil"...
+        const proxima = chave((partes.slice(ultimo + 1).find(p => p.trim() !== '')) || '');
+        if (palavras === 1 && (k === 'um' || k === 'uma') && !PALAVRAS_DE_VALOR.includes(proxima)) { saida.push(partes[i]); i++; continue; }
+        saida.push(String(total + atual));
+        i = ultimo + 1;
+      }
+      return saida.join('')
+        // centavos: "30 reais e 50 centavos", "30 e 50 centavos", "30 com 50 centavos"
+        .replace(/(\d+)\s*(?:reais|real)?\s*(?:e|com)\s*(\d{1,2})\s*centavos?\b/gi, (m, a, b) => a + ',' + b.padStart(2, '0') + ' reais')
+        // "30 reais e 50" (sem falar "centavos")
+        .replace(/(\d+)\s*(?:reais|real)\s+e\s+(\d{1,2})\b(?!\s*(?:mil|reais|real|,|\d))/gi, (m, a, b) => a + ',' + b.padStart(2, '0') + ' reais')
+        // só centavos: "50 centavos"
+        .replace(/(^|[^\d,])(\d{1,2})\s*centavos?\b/gi, (m, antes, b) => antes + '0,' + b.padStart(2, '0') + ' reais');
+    }
+
     function interpretarTexto(texto, catEntrada, catSaida, hoje) {
-      const original = String(texto || '').trim();
-      const t = semAcento(original);
-      if (!t) return null;
-      // Valor: "R$ 46,50", "46 reais", "1.200", "2 mil"
-      let valor = NaN, trechoValor = '';
-      const mMil = t.match(/(\d+(?:[.,]\d+)?)\s*mil\b/);
-      const mDinheiro = t.match(/r\$\s*(\d[\d.]*(?:,\d{1,2})?)|(\d[\d.]*(?:,\d{1,2})?)\s*(?:reais|real|conto|contos|pila)\b/);
-      const mNumero = t.replace(/\bdia\s+\d{1,2}\b/, ' ').match(/\d[\d.]*(?:,\d{1,2})?/);
-      if (mMil) { valor = Number(mMil[1].replace(',', '.')) * 1000; trechoValor = mMil[0]; }
-      else if (mDinheiro) { valor = lerValor(mDinheiro[1] || mDinheiro[2]); trechoValor = mDinheiro[0]; }
-      else if (mNumero) { valor = lerValor(mNumero[0]); trechoValor = mNumero[0]; }
-      if (isNaN(valor) || valor <= 0) return null;
-      const resto = t.replace(trechoValor, ' ');
+      // d = a frase com os números em algarismos; t = a mesma frase sem acento e minúscula.
+      // As duas têm o mesmo tamanho, então o que for achado em t pode ser tirado de d na mesma posição.
+      let d = numerosPorExtenso(String(texto || '').trim());
+      let t = semAcento(d);
+      if (!t.trim()) return null;
+      if (t.length !== d.length) d = t; // segurança: se o tamanho mudou, a descrição sai sem acento
+      const apagar = (ini, fim) => {
+        const vazio = ' '.repeat(fim - ini);
+        t = t.slice(0, ini) + vazio + t.slice(fim);
+        d = d.slice(0, ini) + vazio + d.slice(fim);
+      };
+
+      // Valor: "R$ 46,50", "46 reais", "1.200", "2 mil", "2 mil e 500"
+      let valor = NaN, achado = null;
+      const mMil = /(\d+(?:[.,]\d+)?)\s*mil\b(?:\s+e\s+(\d{1,3})\b)?/.exec(t);
+      const mDinheiro = /r\$\s*(\d[\d.]*(?:,\d{1,2})?)|(\d[\d.]*(?:,\d{1,2})?)\s*(?:reais|real|conto|contos|pila|paus)\b/.exec(t);
+      if (mMil) { valor = Number(mMil[1].replace(',', '.')) * 1000 + Number(mMil[2] || 0); achado = mMil; }
+      else if (mDinheiro) { valor = lerValor(mDinheiro[1] || mDinheiro[2]); achado = mDinheiro; }
+      else {
+        // Sem "reais": fica com o maior número da frase ("2 pizzas por 80" = 80),
+        // fora o "dia 5" e o "99" do aplicativo de corrida
+        const semDia = t.replace(/\bdia\s+\d{1,2}\b/g, (x) => ' '.repeat(x.length));
+        let numeros = [...semDia.matchAll(/\d[\d.]*(?:,\d{1,2})?/g)];
+        if (numeros.length > 1) numeros = numeros.filter(m => m[0] !== '99');
+        numeros.forEach(m => { const v = lerValor(m[0].replace(/\.$/, '')); if (!(v <= valor)) { valor = v; achado = m; } });
+      }
+      if (!achado || isNaN(valor) || valor <= 0) return null;
+      apagar(achado.index, achado.index + achado[0].length);
 
       // Tipo
       let type = 'gasto';
-      if (PALAVRAS_RECEITA.some(p => contemPalavra(resto, p))) type = 'receita';
-      else if (PALAVRAS_DESPESA.some(p => contemPalavra(resto, p))) type = 'despesa';
+      if (PALAVRAS_RECEITA.some(p => contemPalavra(t, p))) type = 'receita';
+      else if (PALAVRAS_DESPESA.some(p => contemPalavra(t, p))) type = 'despesa';
 
-      // Data
+      // Data: "ontem", "anteontem", "semana passada", "na sexta", "dia 5", "dia 5 de setembro"
       const base = new Date(hoje + 'T12:00:00');
-      if (contemPalavra(resto, 'anteontem')) base.setDate(base.getDate() - 2);
-      else if (contemPalavra(resto, 'ontem')) base.setDate(base.getDate() - 1);
-      else {
-        const mDia = resto.match(/\bdia\s+(\d{1,2})\b/);
-        if (mDia && Number(mDia[1]) >= 1 && Number(mDia[1]) <= 31) base.setDate(Math.min(Number(mDia[1]), new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate()));
+      const DIAS_SEMANA = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
+      const MESES = ['janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+      const mDia = /\bdia\s+(\d{1,2})\b(?:\s+de\s+(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b)?/.exec(t);
+      const mSemana = /\b(?:na|no|nessa|nesta|nesse|neste|essa|esta|ultima|ultimo)\s+(domingo|segunda|terca|quarta|quinta|sexta|sabado)(?:[\s-]feira)?(\s+passad[oa])?\b/.exec(t);
+      const mPassada = /\b(?:semana|domingo|segunda|terca|quarta|quinta|sexta|sabado)\s+passad[oa]\b/.exec(t);
+      if (contemPalavra(t, 'anteontem')) base.setDate(base.getDate() - 2);
+      else if (contemPalavra(t, 'ontem')) base.setDate(base.getDate() - 1);
+      else if (mDia && Number(mDia[1]) >= 1 && Number(mDia[1]) <= 31) {
+        if (mDia[2]) {
+          base.setDate(1);
+          base.setMonth(MESES.indexOf(mDia[2]));
+          if (base > new Date(hoje + 'T12:00:00')) base.setFullYear(base.getFullYear() - 1); // "dia 20 de dezembro" falado em janeiro
+        }
+        base.setDate(Math.min(Number(mDia[1]), new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate()));
+        apagar(mDia.index, mDia.index + mDia[0].length);
+      } else if (mSemana) {
+        let volta = (base.getDay() - DIAS_SEMANA.indexOf(mSemana[1]) + 7) % 7;
+        if (mSemana[2] && volta === 0) volta = 7;
+        base.setDate(base.getDate() - volta);
+        apagar(mSemana.index, mSemana.index + mSemana[0].length);
+      } else if (mPassada) {
+        const dia = DIAS_SEMANA.indexOf(mPassada[0].split(/\s/)[0]);
+        base.setDate(base.getDate() - (dia < 0 ? 7 : ((base.getDay() - dia + 7) % 7 || 7)));
+        apagar(mPassada.index, mPassada.index + mPassada[0].length);
       }
       const date = base.getFullYear() + '-' + String(base.getMonth() + 1).padStart(2, '0') + '-' + String(base.getDate()).padStart(2, '0');
+      const resto = t;
 
       // Categoria: primeiro as criadas pela pessoa (pelo nome), depois as palavras conhecidas
       const lista = type === 'receita' ? catEntrada : catSaida;
-      let category = lista.find(c => c !== 'Outros' && contemPalavra(resto, semAcento(c)));
+      // (aceita o plural: "pizzas", "remédios", "pets" / "pet")
+      const temPalavra = (p) => contemPalavra(resto, p) || contemPalavra(resto, p + 's') || (p.endsWith('s') && contemPalavra(resto, p.slice(0, -1)));
+      let category = lista.find(c => c !== 'Outros' && temPalavra(semAcento(c)));
       if (!category) {
-        const achada = PALAVRAS_CATEGORIA.find(([cat, palavras]) => lista.includes(cat) && palavras.some(p => contemPalavra(resto, p)));
+        const achada = PALAVRAS_CATEGORIA.find(([cat, palavras]) => lista.includes(cat) && palavras.some(temPalavra));
         category = achada ? achada[0] : 'Outros';
       }
 
       // Descrição: a frase sem o valor e sem as palavras de comando
-      const tirar = ['gastei', 'paguei', 'comprei', 'recebi', 'ganhei', 'vendi', 'entrou', 'caiu', 'hoje', 'ontem', 'anteontem', 'reais', 'real', 'r\\$', 'por', 'com', 'no', 'na', 'nos', 'nas', 'em', 'de', 'do', 'da', 'dos', 'das', 'um', 'uma', 'pra', 'para', 'o', 'a'];
-      let desc = original.replace(new RegExp(trechoValor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), ' ');
-      desc = desc.replace(/\bdia\s+\d{1,2}\b/i, ' ');
-      tirar.forEach(p => { desc = desc.replace(new RegExp('(^|\\s)' + p + '(?=\\s|$)', 'gi'), ' '); });
-      desc = desc.replace(/\s+/g, ' ').trim();
+      const tirar = ['eu', 'gastei', 'gastamos', 'torrei', 'paguei', 'pagamos', 'comprei', 'compramos', 'custou', 'saiu', 'foi', 'deu', 'recebi', 'recebemos', 'ganhei', 'vendi', 'entrou', 'caiu', 'hoje', 'agora', 'ontem', 'anteontem', 'reais', 'real', 'r\\$', 'conto', 'contos', 'pila', 'paus', 'por', 'com', 'no', 'na', 'nos', 'nas', 'em', 'de', 'do', 'da', 'dos', 'das', 'um', 'uma', 'pra', 'para', 'pro', 'o', 'a', 'os', 'as', 'ao'];
+      let desc = d.replace(/[.,!?;:]+(\s|$)/g, ' ');
+      for (let i = 0; i < 2; i++) tirar.forEach(p => { desc = desc.replace(new RegExp('(^|\\s)' + p + '(?=\\s|$)', 'gi'), ' '); });
+      desc = desc.replace(/\s+/g, ' ').trim().replace(/^e\s+|\s+e$/i, '');
       if (!desc) desc = category === 'Outros' ? (type === 'receita' ? 'Receita' : 'Gasto') : category;
       desc = desc.charAt(0).toUpperCase() + desc.slice(1);
 
@@ -1916,7 +1992,7 @@
         setTextoRapido(texto);
         setPreviaRapida(null);
         clearTimeout(timerRapido.current);
-        if (!/\d|\bmil\b/i.test(texto)) return;
+        if (!/\d/.test(numerosPorExtenso(texto))) return;
         timerRapido.current = setTimeout(() => {
           const r = interpretarTexto(texto, catEntrada, catSaida, hojeISO());
           if (r) { setPreviaRapida(r); setOuvindo(false); }
