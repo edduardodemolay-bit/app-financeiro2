@@ -1302,8 +1302,15 @@
             // Os dados deste aparelho são de outra conta? Não mistura: apaga daqui e usa os desta conta.
             const uidAnterior = lerChave(CHAVE_UID_NUVEM);
             if (uidAnterior && uidAnterior !== user.uid && temDados(lerLocal())) {
-              const trocar = window.confirm('Este aparelho tem dados de outra conta.\n\nOK = apagar esses dados daqui (eles continuam na outra conta) e carregar os da conta ' + (user.email || '') + '\nCancelar = não entrar agora');
+              // A outra conta mexeu no aparelho e ainda não mandou para a nuvem (ex.: sem internet)?
+              // Então esses dados só existem aqui: guarda um backup antes de apagar.
+              const versaoLocalAnterior = lerChave(CHAVE_VERSAO_LOCAL);
+              const pendente = !!versaoLocalAnterior && versaoLocalAnterior !== lerChave(CHAVE_BASE_NUVEM);
+              const trocar = window.confirm(pendente
+                ? 'Este aparelho tem dados de outra conta, e parte deles AINDA NÃO FOI para a nuvem (talvez por falta de internet).\n\nOK = salvar um arquivo de backup com esses dados, apagar daqui e carregar os da conta ' + (user.email || '') + '\nCancelar = não entrar agora (a outra pessoa pode entrar de novo, com internet, para enviar)'
+                : 'Este aparelho tem dados de outra conta.\n\nOK = apagar esses dados daqui (eles continuam na outra conta) e carregar os da conta ' + (user.email || '') + '\nCancelar = não entrar agora');
               if (!trocar) { nuvemRef.current = null; await fb.auth().signOut(); return; }
+              if (pendente) baixarBackup(lerLocal(), 'backup-conta-anterior-' + hojeISO() + '.json');
               limparAparelho();
             }
             gravarChave(CHAVE_UID_NUVEM, user.uid);
@@ -1388,7 +1395,10 @@
         clearTimeout(timerNuvem.current); timerNuvem.current = null;
         let r = await sincronizar();
         if (r === 'ocupado') { await new Promise(ok => setTimeout(ok, 1500)); r = await sincronizar(); }
-        if ((r === 'erro' || r === 'ocupado') && !window.confirm('Não foi possível enviar as últimas mudanças para a sua conta (sem internet?).\n\nSe sair agora, o que não foi enviado se perde. Sair mesmo assim?')) return;
+        if (r === 'erro' || r === 'ocupado') {
+          if (!window.confirm('Não foi possível enviar as últimas mudanças para a sua conta (sem internet?).\n\nSe sair agora, o app salva um arquivo de backup com elas antes de apagar deste aparelho. Sair mesmo assim?')) return;
+          baixarBackup(lerLocal(), 'backup-antes-de-sair-' + hojeISO() + '.json');
+        }
         nuvemRef.current = null;
         try { const fb = await carregarFirebase(); await fb.auth().signOut(); } catch (e) {}
         limparAparelho();
