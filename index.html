@@ -343,6 +343,21 @@
     // "dois mil e quinhentos" -> "2500", "trinta reais e cinquenta centavos" -> "30,50 reais".
     // (O ditado do celular às vezes escreve os números por extenso.)
     const NUMEROS_FALADOS = { zero: 0, um: 1, uma: 1, dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, onze: 11, doze: 12, treze: 13, quatorze: 14, catorze: 14, quinze: 15, dezesseis: 16, dezessete: 17, dezoito: 18, dezenove: 19, vinte: 20, trinta: 30, quarenta: 40, cinquenta: 50, sessenta: 60, setenta: 70, oitenta: 80, noventa: 90, cem: 100, cento: 100, duzentos: 200, duzentas: 200, trezentos: 300, trezentas: 300, quatrocentos: 400, quatrocentas: 400, quinhentos: 500, quinhentas: 500, seiscentos: 600, seiscentas: 600, setecentos: 700, setecentas: 700, oitocentos: 800, oitocentas: 800, novecentos: 900, novecentas: 900 };
+    // Junta os pedaços que o reconhecimento de voz devolve. No Android, cada pedaço costuma
+    // repetir a frase inteira até ali ("gastei", "gastei 30", "gastei 30 no mercado"); somar tudo
+    // gerava "gastei gastei 30 gastei 30 no mercado". Aqui o pedaço que repete o anterior o substitui.
+    function juntarTranscricao(resultados) {
+      let texto = '';
+      for (const r of Array.from(resultados || [])) {
+        const p = String((r && r[0] && r[0].transcript) || '').replace(/\s+/g, ' ').trim();
+        if (!p) continue;
+        const a = semAcento(texto), b = semAcento(p);
+        if (!a || b.startsWith(a)) texto = p;     // o pedaço novo já contém o anterior
+        else if (a.endsWith(b)) continue;          // pedaço repetido
+        else texto = texto + ' ' + p;
+      }
+      return texto;
+    }
     const PALAVRAS_DE_VALOR = ['reais', 'real', 'mil', 'conto', 'contos', 'pila', 'paus', 'centavo', 'centavos'];
     function numerosPorExtenso(texto) {
       const partes = String(texto || '').normalize('NFC').split(/(\s+)/);
@@ -1947,18 +1962,20 @@
         try { rec = new Reconhecimento(); } catch (e) { usarTecladoParaVoz(); return; }
         rec.lang = 'pt-BR';
         rec.interimResults = true;
-        rec.continuous = false;
+        // Contínuo: não corta a frase na primeira pausa. O app para sozinho depois de ~2 s de silêncio.
+        rec.continuous = true;
         rec.maxAlternatives = 1;
-        let textoFinal = '';
+        let textoOuvido = '';
+        let timerSilencio = null;
+        const parar = () => { try { rec.stop(); } catch (e) {} };
+        const esperarSilencio = (ms) => { clearTimeout(timerSilencio); timerSilencio = setTimeout(parar, ms); };
+        const limite = setTimeout(parar, 20000); // no máximo 20 s gravando
         rec.onresult = (ev) => {
-          let parcial = '';
-          for (let i = ev.resultIndex; i < ev.results.length; i++) {
-            const r = ev.results[i];
-            if (r.isFinal) textoFinal += r[0].transcript + ' ';
-            else parcial += r[0].transcript;
-          }
-          setTextoRapido((textoFinal + parcial).replace(/\s+/g, ' ').trim());
+          textoOuvido = juntarTranscricao(ev.results);
+          setTextoRapido(textoOuvido);
+          esperarSilencio(1800);
         };
+        rec.onstart = () => esperarSilencio(7000); // ninguém falou: desliga
         rec.onerror = (ev) => {
           const mensagens = {
             'not-allowed': 'O app não tem permissão para usar o microfone. Libere o microfone para este site nas configurações do navegador, ou use o 🎤 do teclado.',
@@ -1970,9 +1987,11 @@
           if (ev.error !== 'aborted') setAvisoVoz(mensagens[ev.error] || 'Não consegui ouvir. Tente de novo ou use o 🎤 do teclado.');
         };
         rec.onend = () => {
+          clearTimeout(timerSilencio); clearTimeout(limite);
           reconhecedorRef.current = null;
           setOuvindo(false);
-          const texto = textoFinal.replace(/\s+/g, ' ').trim();
+          // Usa o último texto ouvido, mesmo que o celular não tenha marcado como "final"
+          const texto = textoOuvido;
           if (!texto) return;
           setTextoRapido(texto);
           const r = interpretarTexto(texto, catEntrada, catSaida, hojeISO());

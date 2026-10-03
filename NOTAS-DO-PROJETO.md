@@ -28,6 +28,7 @@ Este arquivo existe para que qualquer computador ou sessão do Claude saiba em q
 - Ele não é programador: explique em português simples.
 
 ## Histórico recente
+- **03/10 (2):** correção da transcrição do 🎤 (o Eduardo relatou "está bugando"). No Android, cada pedaço do reconhecimento repete a frase inteira, e o app somava tudo ("gastei gastei 30 gastei 30 no..."). Agora a função `juntarTranscricao` junta os pedaços sem repetir. A gravação é contínua (não corta na primeira pausa), para sozinha depois de ~2 s de silêncio (máximo de 20 s; desliga em 7 s se ninguém falar) e usa o último texto ouvido mesmo que o celular não o marque como final.
 - **03/10:** o app passou a entender melhor as frases faladas no lançamento rápido (função `interpretarTexto` e a nova `numerosPorExtenso`):
   - números por extenso ("trinta e cinco reais", "dois mil e quinhentos") e centavos ("30 reais e 50 centavos", "12 reais e 90");
   - "2 mil e 500";
