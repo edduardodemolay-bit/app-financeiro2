@@ -170,6 +170,9 @@
     const CloudIcon = createIcon('cloud');
     const LogOut = createIcon('log-out');
     const ShieldIcon = createIcon('shield-check');
+    const HandCoins = createIcon('hand-coins');
+    const Check = createIcon('check');
+    const MessageCircle = createIcon('message-circle');
 
     // Nome completo e idade preenchidos em "Criar conta", usados ao registrar o acesso da conta nova
     let cadastroPendente = null;
@@ -536,6 +539,11 @@
     }
     const entraNaConta = (t) => t.metaMov !== 'entrada';
 
+    // Lançamento "a confirmar" (aConfirmar: true): criado com data futura, conta fixa do mês ou
+    // dívida de alguém. Só entra no saldo quando a pessoa toca em "Recebi" / "Paguei"
+    // (aí vira aConfirmar: false). Os ligados a metas ficam de fora, para não bagunçar o valor guardado.
+    const marcarAConfirmar = (t, hoje) => (!t.metaMov && t.date > hoje ? { ...t, aConfirmar: true } : t);
+
     // Datas de um lançamento que se repete a cada N dias, X vezes no total
     function datasRepeticao(inicio, cadaDias, vezes) {
       const base = new Date(inicio + 'T12:00:00');
@@ -620,6 +628,9 @@
             if (!existentes.has(id)) {
               const nova = { id, description: r.description, amount: r.amount, category: r.category, type: r.type, date: mes + '-' + dia, recorrenteId: r.id };
               if (r.metaId && r.metaMov) { nova.metaId = r.metaId; nova.metaMov = r.metaMov; }
+              // A do mês atual (salário, aluguel…) espera a pessoa tocar em "Recebi" / "Paguei".
+              // Meses antigos gerados de uma vez já contam como feitos.
+              else if (mes === mesAtual) nova.aConfirmar = true;
               novas.push(nova);
               existentes.add(id);
             }
@@ -1717,10 +1728,27 @@
 
       // Números do mês escolhido (Dashboard e Planejamento)
       const somar = (lista) => lista.reduce((acc, t) => acc + Number(t.amount), 0);
-      // Lançamentos com data futura são "agendados": aparecem à parte e só entram nos totais quando o dia chegar
+      // Lançamentos com data futura são "agendados" e os "a confirmar" esperam o "Recebi" / "Paguei":
+      // os dois aparecem à parte e ficam fora do saldo e dos totais.
       const hoje = hojeISO();
-      const ehFuturo = (t) => t.date > hoje;
-      const agendadosDoMes = transacoes.filter(t => mesDe(t.date) === mesSelecionado && ehFuturo(t)).sort((a, b) => a.date.localeCompare(b.date));
+      const ehFuturo = (t) => t.date > hoje || t.aConfirmar === true;
+      // (as dívidas de outras pessoas ficam na aba "Quem me deve")
+      const agendadosDoMes = transacoes.filter(t => mesDe(t.date) === mesSelecionado && ehFuturo(t) && !t.devedor).sort((a, b) => a.date.localeCompare(b.date));
+      // Já chegou o dia e ainda não foi confirmado (de qualquer mês)
+      const paraConfirmar = transacoes.filter(t => t.aConfirmar === true && t.date <= hoje && !t.devedor).sort((a, b) => a.date.localeCompare(b.date));
+      // Quem me deve: dívidas em aberto agrupadas por pessoa
+      const dividasAbertas = transacoes.filter(t => t.devedor && t.aConfirmar === true);
+      const pessoasDevendo = Object.values(dividasAbertas.reduce((acc, t) => {
+        const chave = semAcento(t.devedor).trim();
+        if (!acc[chave]) acc[chave] = { nome: t.devedor, itens: [], total: 0, telefone: '' };
+        acc[chave].itens.push(t);
+        acc[chave].total += Number(t.amount);
+        if (t.telefone) acc[chave].telefone = t.telefone;
+        return acc;
+      }, {})).map(p => ({ ...p, itens: p.itens.sort((a, b) => a.date.localeCompare(b.date)) })).sort((a, b) => b.total - a.total);
+      const totalDividas = dividasAbertas.reduce((a, t) => a + Number(t.amount), 0);
+      const dividasRecebidas = transacoes.filter(t => t.devedor && t.aConfirmar === false).sort((a, b) => String(b.confirmadoEm || b.date).localeCompare(String(a.confirmadoEm || a.date))).slice(0, 10);
+      const nomesDevedores = [...new Set(transacoes.filter(t => t.devedor).map(t => t.devedor))];
       const transacoesDoMes = transacoes.filter(t => mesDe(t.date) === mesSelecionado && !ehFuturo(t));
       const totalReceitas = somar(transacoesDoMes.filter(t => t.type === 'receita'));
       // Receitas que ficaram na conta (as que foram direto para metas não entram no saldo da conta)
@@ -1851,6 +1879,11 @@
         }
 
         if (editandoId !== null) {
+          // Continua "a confirmar" enquanto não foi confirmado; mudar para uma data futura volta a esperar
+          const ligadoAMeta = dados.metaMov || (original && original.metaMov);
+          const espera = !ligadoAMeta && (dataTransacao > hoje || (original && original.aConfirmar === true));
+          if (espera) dados.aConfirmar = true;
+          else if (original && original.aConfirmar !== undefined) dados.aConfirmar = false;
           novasTransacoes = ordenarPorData(transacoes.map(t => (t.id === editandoId ? { ...t, ...dados } : t)));
           afetadas = novasTransacoes.filter(t => t.id === editandoId);
         } else if (usarDias) {
@@ -1886,6 +1919,12 @@
           novasTransacoes = ordenarPorData([nova, ...transacoes]);
           afetadas = [nova];
         }
+        if (editandoId === null) {
+          // Os novos com data futura ficam esperando o "Recebi" / "Paguei"
+          const ids = new Set(afetadas.map(t => t.id));
+          novasTransacoes = novasTransacoes.map(t => (ids.has(t.id) ? marcarAConfirmar(t, hoje) : t));
+          afetadas = novasTransacoes.filter(t => ids.has(t.id));
+        }
         // Ao editar, primeiro tira da meta antiga o valor que o lançamento tinha
         const base = original ? sincronizarMeta(metas, original, true) : metas;
         novasMetas = afetadas.reduce((acc, t) => sincronizarMeta(acc, t), base);
@@ -1909,7 +1948,7 @@
       // Salva direto o que o lançamento rápido entendeu
       function salvarLancamentoRapido() {
         if (!previaRapida) return;
-        const nova = { id: Date.now(), ...previaRapida, autor: nomeAutor, viaRapido: true, ...(meuUid ? { autorUid: meuUid } : {}) };
+        const nova = marcarAConfirmar({ id: Date.now(), ...previaRapida, autor: nomeAutor, viaRapido: true, ...(meuUid ? { autorUid: meuUid } : {}) }, hojeISO());
         const novasTransacoes = ordenarPorData([nova, ...transacoes]);
         const hist = anotar('Lançou pelo lançamento rápido', nova.description + ' · ' + formatarMoeda(nova.amount) + ' · ' + nova.category);
         setTransacoes(novasTransacoes);
@@ -2069,6 +2108,114 @@
           salvarTudoNoDisco({ transacoes: novasTransacoes, metas: novasMetas, historico: hist });
         }
       }
+
+      // ===== CONFIRMAR "RECEBI" / "PAGUEI" =====
+      const podeMexer = (t) => podeGerenciar || (meuUid && t.autorUid === meuUid);
+      // O lançamento a confirmar passa a contar no saldo. Confirmado antes da data, fica com a data de hoje.
+      function confirmarLancamento(t) {
+        if (!podeMexer(t)) { exibirNotificacao('Nesta gestão compartilhada, você só pode confirmar o que você mesmo lançou.'); return; }
+        const entrada = t.type === 'receita';
+        const pergunta = entrada
+          ? 'Deu certo? Confirmar que você RECEBEU ' + formatarMoeda(t.amount) + (t.devedor ? ' de ' + t.devedor : '') + ' (' + t.description + ')?\n\nO valor entra no seu saldo.'
+          : 'Deu certo? Confirmar que você PAGOU ' + formatarMoeda(t.amount) + ' (' + t.description + ')?\n\nO valor sai do seu saldo.';
+        if (!confirm(pergunta)) return;
+        const dia = hojeISO();
+        // Confirmado antes do dia: fica com a data de hoje, e a data combinada é guardada para o "desfazer"
+        const novasTransacoes = ordenarPorData(transacoes.map(x => (x.id === t.id ? { ...x, aConfirmar: false, date: x.date > dia ? dia : x.date, ...(x.date > dia ? { dataPrevista: x.date } : {}), confirmadoEm: dia, confirmadoPor: nomeAutor } : x)));
+        const hist = anotar(entrada ? 'Confirmou que recebeu' : 'Confirmou que pagou', (t.devedor ? t.devedor + ' · ' : '') + t.description + ' · ' + formatarMoeda(t.amount));
+        setTransacoes(novasTransacoes);
+        salvarTudoNoDisco({ transacoes: novasTransacoes, historico: hist });
+        exibirNotificacao((entrada ? 'Recebido: ' : 'Pago: ') + formatarMoeda(t.amount) + (entrada ? ' entrou no saldo' : ' saiu do saldo'));
+      }
+      const botaoConfirmar = (t) => podeMexer(t) && (
+        <button onClick={() => confirmarLancamento(t)} title={t.type === 'receita' ? 'Confirmar que recebeu' : 'Confirmar que pagou'} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: t.type === 'receita' ? 'var(--accent)' : 'var(--danger-text)', color: '#ffffff', border: 'none', borderRadius: '8px', padding: '6px 10px', fontWeight: '700', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <Check size={14} /> {t.type === 'receita' ? 'Recebi' : 'Paguei'}
+        </button>
+      );
+      // Confirmou errado: volta a esperar o "Recebi" / "Paguei" (e volta para a data combinada)
+      function desfazerConfirmacao(t) {
+        if (!podeMexer(t)) { exibirNotificacao('Nesta gestão compartilhada, você só pode mexer no que você mesmo lançou.'); return; }
+        if (!confirm('Desfazer a confirmação de "' + t.description + '" (' + formatarMoeda(t.amount) + ')? Ele sai do saldo e volta a esperar o ' + (t.type === 'receita' ? 'Recebi.' : 'Paguei.'))) return;
+        const novasTransacoes = ordenarPorData(transacoes.map(x => (x.id === t.id ? { ...x, aConfirmar: true, date: x.dataPrevista || x.date, dataPrevista: undefined, confirmadoEm: undefined, confirmadoPor: undefined } : x)));
+        const hist = anotar('Desfez confirmação', (t.devedor ? t.devedor + ' · ' : '') + t.description + ' · ' + formatarMoeda(t.amount));
+        setTransacoes(novasTransacoes);
+        salvarTudoNoDisco({ transacoes: novasTransacoes, historico: hist });
+        exibirNotificacao('Confirmação desfeita: ' + t.description + ' voltou a esperar');
+      }
+      // Selo do lançamento que ainda não conta no saldo, ou que já foi confirmado
+      const seloPendente = (t) => {
+        if (t.aConfirmar === false && t.confirmadoEm) return (
+          <span title={'Confirmado por ' + (t.confirmadoPor || 'você')} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(var(--accent-rgb), 0.15)', color: 'var(--accent-text)', fontWeight: '700' }}>
+            ✓ {t.type === 'receita' ? 'Recebido' : 'Pago'} em {formatarDataBR(t.confirmadoEm).slice(0, 5)}
+            {podeMexer(t) && <button onClick={() => desfazerConfirmacao(t)} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--text-muted)', fontSize: '10px', fontWeight: '600', textDecoration: 'underline', cursor: 'pointer' }}>desfazer</button>}
+          </span>
+        );
+        if (t.date > hoje) return <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--border-strong)', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase' }}>Agendado</span>;
+        if (t.aConfirmar === true) return <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--c-amber)', color: 'var(--c-amber)', fontWeight: '700', textTransform: 'uppercase' }}>A confirmar</span>;
+        return null;
+      };
+
+      // ===== QUEM ME DEVE =====
+      // "Emprestei" já vem marcado: o valor sai do saldo hoje e volta quando a pessoa pagar.
+      // Venda fiado (nenhum dinheiro saiu) é só desmarcar.
+      const FORM_DIVIDA_VAZIO = { nome: '', valor: '', descricao: '', data: '', telefone: '', categoria: 'Outros', emprestei: true };
+      const [formDivida, setFormDivida] = useState(FORM_DIVIDA_VAZIO);
+      const [erroDivida, setErroDivida] = useState('');
+      const [parteAberta, setParteAberta] = useState(null);
+      const [valorParte, setValorParte] = useState('');
+      const mudarDivida = (campo, valorCampo) => setFormDivida(f => ({ ...f, [campo]: valorCampo }));
+
+      function anotarDivida(e) {
+        e.preventDefault();
+        setErroDivida('');
+        const nome = formDivida.nome.trim().replace(/\s+/g, ' ');
+        const v = Math.round(lerValor(formDivida.valor) * 100) / 100;
+        if (!nome) { setErroDivida('Escreva o nome de quem está devendo.'); return; }
+        if (!(v > 0)) { setErroDivida('Digite o valor, por exemplo 150 ou 49,90.'); return; }
+        const dia = hojeISO();
+        const motivo = formDivida.descricao.trim();
+        const telefone = formDivida.telefone.replace(/\D/g, '');
+        const autoria = { autor: nomeAutor, ...(meuUid ? { autorUid: meuUid } : {}) };
+        const id = Date.now();
+        // Mesmo nome escrito de outro jeito ("joão" / "João") vira a mesma pessoa
+        const nomeIgual = nomesDevedores.find(n => semAcento(n).trim() === semAcento(nome)) || nome;
+        const divida = { id, description: motivo || (formDivida.emprestei ? 'Empréstimo' : 'Dívida'), amount: v, category: formDivida.categoria, type: 'receita', date: formDivida.data || dia, aConfirmar: true, devedor: nomeIgual, ...(telefone ? { telefone } : {}), ...autoria };
+        const novos = [divida];
+        // Emprestou em dinheiro: o valor sai da conta agora e volta quando a pessoa pagar
+        if (formDivida.emprestei) novos.push({ id: id + 1, description: 'Emprestei para ' + nomeIgual + (motivo ? ' (' + motivo + ')' : ''), amount: v, category: 'Outros', type: 'gasto', date: dia, emprestimoPara: nomeIgual, ...autoria });
+        const novasTransacoes = ordenarPorData([...novos, ...transacoes]);
+        const hist = anotar('Anotou dívida', nomeIgual + ' · ' + divida.description + ' · ' + formatarMoeda(v));
+        setTransacoes(novasTransacoes);
+        salvarTudoNoDisco({ transacoes: novasTransacoes, historico: hist });
+        setFormDivida(FORM_DIVIDA_VAZIO);
+        exibirNotificacao('Anotado: ' + nomeIgual + ' te deve ' + formatarMoeda(v));
+      }
+
+      // Recebeu só uma parte: a parte vira receita no saldo e a dívida fica com o que falta
+      function receberParte(t) {
+        const v = Math.round(lerValor(valorParte) * 100) / 100;
+        if (!(v > 0)) { exibirNotificacao('Digite quanto recebeu, por exemplo 50'); return; }
+        if (!podeMexer(t)) { exibirNotificacao('Nesta gestão compartilhada, você só pode confirmar o que você mesmo lançou.'); return; }
+        setParteAberta(null); setValorParte('');
+        if (v >= Number(t.amount) - 0.005) { confirmarLancamento(t); return; }
+        const dia = hojeISO();
+        const falta = Math.round((Number(t.amount) - v) * 100) / 100;
+        const recebido = { ...t, id: Date.now(), amount: v, date: dia, aConfirmar: false, confirmadoEm: dia, confirmadoPor: nomeAutor, description: t.description + ' (parte)', autor: nomeAutor, ...(meuUid ? { autorUid: meuUid } : {}) };
+        const novasTransacoes = ordenarPorData([recebido, ...transacoes.map(x => (x.id === t.id ? { ...x, amount: falta } : x))]);
+        const hist = anotar('Recebeu parte da dívida', t.devedor + ' · ' + t.description + ' · ' + formatarMoeda(v) + ' (falta ' + formatarMoeda(falta) + ')');
+        setTransacoes(novasTransacoes);
+        salvarTudoNoDisco({ transacoes: novasTransacoes, historico: hist });
+        exibirNotificacao('Recebido ' + formatarMoeda(v) + ' de ' + t.devedor + '. Falta ' + formatarMoeda(falta));
+      }
+
+      // Abre o WhatsApp com uma mensagem educada de lembrete (sem número, a pessoa escolhe o contato)
+      const linkCobranca = (p) => {
+        const itens = p.itens.map(t => t.description + ' (' + formatarMoeda(t.amount) + ')').join(', ');
+        const texto = 'Oi, ' + p.nome.split(' ')[0] + '! Tudo bem? Passando para lembrar do valor de ' + formatarMoeda(p.total) + ': ' + itens + '. Obrigado!';
+        const tel = String(p.telefone || '').replace(/\D/g, '');
+        const numero = tel.length === 10 || tel.length === 11 ? '55' + tel : tel;
+        return 'https://wa.me/' + numero + '?text=' + encodeURIComponent(texto);
+      };
 
       const transacoesFiltradas = transacoes.filter(t => {
         if (filtroTipo !== 'todas' && t.type !== filtroTipo) return false;
@@ -2522,6 +2669,7 @@
         return (
           <React.Fragment>
             {meta && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(168, 85, 247, 0.15)', color: 'var(--c-purple)', fontWeight: '700' }}>→ Meta: {meta.nome}</span>}
+            {t.devedor && <span title="Dívida anotada em Quem me deve" style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(245, 158, 11, 0.15)', color: 'var(--c-amber)', fontWeight: '700' }}>👤 {t.devedor}</span>}
             {t.exemplo && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--c-sky)', color: 'var(--c-sky)', fontWeight: '700', textTransform: 'uppercase' }}>Exemplo</span>}
             {t.repeticao && <span title="Lançamento que se repete" style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Repeat size={11} /> {t.repeticao}</span>}
             {t.viaWhatsapp && <span title="Lançado por mensagem no WhatsApp" style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', backgroundColor: 'rgba(37, 211, 102, 0.15)', color: '#15803d', fontWeight: '700' }}>📲 WhatsApp</span>}
@@ -2629,6 +2777,7 @@
                   { id: 'extrato', label: 'Extrato', icon: Receipt },
                   { id: 'metas', label: 'Metas', icon: Target },
                   { id: 'calendario', label: 'Calendário', icon: CalendarIcon },
+                  { id: 'devedores', label: 'Quem me deve', icon: HandCoins },
                   { id: 'historico', label: 'Histórico', icon: History },
                   ...(ehAdmin ? [{ id: 'admin', label: 'Administrador', icon: ShieldIcon }] : [])
                 ].map(item => {
@@ -2866,6 +3015,7 @@
                 {abaAtiva === 'extrato' && 'Extrato de Lançamentos'}
                 {abaAtiva === 'metas' && 'Metas e Objetivos'}
                 {abaAtiva === 'calendario' && 'Calendário Anual Interativo'}
+                {abaAtiva === 'devedores' && 'Quem me deve'}
                 {abaAtiva === 'historico' && 'Histórico de Registros'}
                 {abaAtiva === 'admin' && 'Administrador de Acessos'}
               </h2>
@@ -2940,6 +3090,40 @@
                       </div>
                     )}
                   </div>
+
+                  {paraConfirmar.length > 0 && (
+                    <div style={{ ...estilos.card, border: '1px solid rgba(245, 158, 11, 0.5)' }}>
+                      <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <CheckCircle2 size={16} color="var(--c-amber)" /> Para confirmar ({paraConfirmar.length})
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 14px 0' }}>O dia já chegou. Toque em <strong>Recebi</strong> ou <strong>Paguei</strong> quando o dinheiro entrar ou sair de verdade; só então ele conta no saldo.</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {paraConfirmar.map(t => (
+                          <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', backgroundColor: 'var(--bg)', border: '1px dashed var(--c-amber)', borderRadius: '12px', padding: isMobile ? '10px 12px' : '12px 18px' }}>
+                            <div style={{ minWidth: 0, flex: '1 1 160px' }}>
+                              <p style={{ margin: '0 0 2px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px', overflowWrap: 'anywhere' }}>{t.description}</p>
+                              <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{t.date === hoje ? 'Hoje' : 'Desde ' + formatarDataBR(t.date)} · {t.category}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                              <strong style={{ fontSize: '14px', color: renderCorTipo(t.type), whiteSpace: 'nowrap' }}>{t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}</strong>
+                              {botaoConfirmar(t)}
+                              {botoesItem(t)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {pessoasDevendo.length > 0 && (
+                    <button onClick={() => setAbaAtiva('devedores')} style={{ ...estilos.card, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', cursor: 'pointer', textAlign: 'left', width: '100%', font: 'inherit', color: 'inherit' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                        <HandCoins size={20} color="var(--c-amber)" />
+                        <span style={{ fontSize: '14px', color: 'var(--text)' }}><strong>{pessoasDevendo.length === 1 ? pessoasDevendo[0].nome + ' te deve' : pessoasDevendo.length + ' pessoas te devem'}</strong> {formatarMoeda(totalDividas)}</span>
+                      </span>
+                      <span style={{ fontSize: '12px', color: 'var(--accent-text)', fontWeight: '700', whiteSpace: 'nowrap' }}>Ver →</span>
+                    </button>
+                  )}
 
                   {seletorMes}
 
@@ -3098,7 +3282,7 @@
                                       {t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto'}
                                     </span>
                                     <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)}</span>
-                                    {ehFuturo(t) && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--border-strong)', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase' }}>Agendado</span>}
+                                    {seloPendente(t)}
                                     {selosExtras(t)}
                                   </div>
                                 </div>
@@ -3116,9 +3300,9 @@
                   {agendadosDoMes.length > 0 && (
                     <div style={estilos.card}>
                       <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <CalendarIcon size={16} /> Agendados ({agendadosDoMes.length})
+                        <CalendarIcon size={16} /> Agendados e a confirmar ({agendadosDoMes.length})
                       </h3>
-                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 14px 0' }}>Lançamentos com data futura. Só entram no saldo e no planejamento quando o dia chegar.</p>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 14px 0' }}>Só entram no saldo e no planejamento quando você toca em <strong>Recebi</strong> ou <strong>Paguei</strong>.</p>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {agendadosDoMes.map(t => (
                           <div key={t.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', backgroundColor: 'var(--bg)', border: '1px dashed var(--border-strong)', borderRadius: '12px', padding: isMobile ? '10px 12px' : '12px 18px' }}>
@@ -3126,10 +3310,11 @@
                               <p style={{ margin: '0 0 2px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px', overflowWrap: 'anywhere' }}>{t.description}</p>
                               <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)} · {t.category}</span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                               <span style={{ fontWeight: 'bold', fontSize: '14px', color: renderCorTipo(t.type), opacity: 0.8, whiteSpace: 'nowrap' }}>
                                 {t.type === 'receita' ? '+' : '-'} {formatarMoeda(t.amount)}
                               </span>
+                              {!t.metaMov && botaoConfirmar(t)}
                               {botoesItem(t)}
                             </div>
                           </div>
@@ -3359,8 +3544,9 @@
                                       {t.type === 'receita' ? 'Receita' : t.type === 'despesa' ? 'Despesa' : 'Gasto'}
                                     </span>
                                     <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>{formatarDataBR(t.date)}</span>
-                                    {ehFuturo(t) && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', border: '1px dashed var(--border-strong)', color: 'var(--text-muted)', fontWeight: '700', textTransform: 'uppercase' }}>Agendado</span>}
+                                    {seloPendente(t)}
                                     {selosExtras(t)}
+                                    {t.aConfirmar === true && botaoConfirmar(t)}
                                   </div>
                                 </div>
                               </div>
@@ -3637,6 +3823,111 @@
                 </div>
               )}
 
+              {abaAtiva === 'devedores' && (() => {
+                const rotulo = { display: 'block', fontSize: '12px', fontWeight: '700', color: 'var(--text-muted)', margin: '0 0 6px 0' };
+                const atrasada = (t) => t.date < hoje;
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '20px' }}>
+                      <div style={estilos.card}>
+                        <p style={tituloSecao}>Total a receber</p>
+                        <h3 style={{ fontSize: '28px', fontWeight: '800', color: 'var(--c-amber)', margin: 0 }}>{formatarMoeda(totalDividas)}</h3>
+                        <p style={{ fontSize: '11px', color: 'var(--text-faint)', margin: '8px 0 0 0' }}>{pessoasDevendo.length === 0 ? 'Ninguém te deve agora' : pessoasDevendo.length === 1 ? '1 pessoa' : pessoasDevendo.length + ' pessoas'} · só entra no saldo quando você confirmar que recebeu</p>
+                      </div>
+                    </div>
+
+                    <form onSubmit={anotarDivida} style={estilos.card}>
+                      <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}><HandCoins size={16} color="var(--c-amber)" /> Anotar quem está devendo</h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 16px 0' }}>Venda fiado, dinheiro emprestado, conta dividida… Quando a pessoa pagar, toque em <strong>Recebi</strong>.</p>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '14px' }}>
+                        <label><span style={rotulo}>Quem está devendo</span>
+                          <input list="lista-devedores" value={formDivida.nome} onChange={e => mudarDivida('nome', e.target.value)} placeholder="Ex: João" autoComplete="off" style={estilos.input} />
+                          <datalist id="lista-devedores">{nomesDevedores.map(n => <option key={n} value={n} />)}</datalist>
+                        </label>
+                        <label><span style={rotulo}>Valor</span>
+                          <input inputMode="decimal" value={formDivida.valor} onChange={e => mudarDivida('valor', e.target.value)} placeholder="Ex: 150,00" style={estilos.input} />
+                        </label>
+                        <label><span style={rotulo}>O que foi (opcional)</span>
+                          <input value={formDivida.descricao} onChange={e => mudarDivida('descricao', e.target.value)} placeholder="Ex: almoço, venda do bolo" maxLength={60} style={estilos.input} />
+                        </label>
+                        <label><span style={rotulo}>Combinou de pagar em (opcional)</span>
+                          <input type="date" value={formDivida.data} onChange={e => mudarDivida('data', e.target.value)} style={estilos.input} />
+                        </label>
+                        <label><span style={rotulo}>WhatsApp da pessoa (opcional)</span>
+                          <input type="tel" inputMode="tel" value={formDivida.telefone} onChange={e => mudarDivida('telefone', e.target.value)} placeholder="Ex: (11) 98888-7777" style={estilos.input} />
+                        </label>
+                        <label><span style={rotulo}>Categoria quando receber</span>
+                          <select value={formDivida.categoria} onChange={e => mudarDivida('categoria', e.target.value)} style={estilos.input}>
+                            {catEntrada.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginTop: '14px', fontSize: '13px', color: 'var(--text)', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={formDivida.emprestei} onChange={e => mudarDivida('emprestei', e.target.checked)} style={{ marginTop: '2px' }} />
+                        <span>Saiu dinheiro do meu saldo <span style={{ color: 'var(--text-muted)' }}>(o valor sai hoje e volta para você quando a pessoa pagar; desmarque se foi venda fiado e nenhum dinheiro saiu)</span></span>
+                      </label>
+                      {erroDivida && <p role="alert" style={{ color: 'var(--danger-text)', fontSize: '13px', margin: '12px 0 0 0' }}>{erroDivida}</p>}
+                      <button type="submit" style={{ ...estilos.buttonPrimary, marginTop: '16px' }}><Plus size={16} /> Anotar</button>
+                    </form>
+
+                    {pessoasDevendo.map(p => (
+                      <div key={p.nome} style={estilos.card}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <h3 style={{ fontSize: '17px', fontWeight: '800', color: 'var(--text-strong)', margin: 0, overflowWrap: 'anywhere' }}>👤 {p.nome}</h3>
+                            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{p.itens.length === 1 ? '1 conta em aberto' : p.itens.length + ' contas em aberto'}{p.telefone ? ' · ' + formatarTelefone(p.telefone) : ''}</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <strong style={{ fontSize: '20px', color: 'var(--c-amber)', whiteSpace: 'nowrap' }}>{formatarMoeda(p.total)}</strong>
+                            <a href={linkCobranca(p)} target="_blank" rel="noopener noreferrer" title="Mandar um lembrete pelo WhatsApp" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: '#16a34a', color: '#ffffff', borderRadius: '8px', padding: '6px 10px', fontWeight: '700', fontSize: '12px', textDecoration: 'none', whiteSpace: 'nowrap' }}><MessageCircle size={14} /> Cobrar</a>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {p.itens.map(t => (
+                            <div key={t.id} style={{ backgroundColor: 'var(--bg)', border: '1px solid ' + (atrasada(t) ? 'rgba(244, 63, 94, 0.45)' : 'var(--border)'), borderRadius: '12px', padding: isMobile ? '10px 12px' : '12px 16px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                <div style={{ minWidth: 0, flex: '1 1 140px' }}>
+                                  <p style={{ margin: '0 0 2px 0', fontWeight: '600', color: 'var(--text)', fontSize: '14px', overflowWrap: 'anywhere' }}>{t.description}</p>
+                                  <span style={{ fontSize: '11px', color: atrasada(t) ? 'var(--danger-text)' : 'var(--text-faint)', fontWeight: atrasada(t) ? '700' : '400' }}>
+                                    {atrasada(t) ? 'Atrasada desde ' + formatarDataBR(t.date) : t.date === hoje ? 'Para hoje' : 'Para ' + formatarDataBR(t.date)} · {t.category}
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                  <strong style={{ fontSize: '15px', color: 'var(--text-strong)', whiteSpace: 'nowrap' }}>{formatarMoeda(t.amount)}</strong>
+                                  {botaoConfirmar(t)}
+                                  {podeMexer(t) && <button onClick={() => { setParteAberta(parteAberta === t.id ? null : t.id); setValorParte(''); }} style={{ background: 'none', border: '1px solid var(--border-strong)', color: 'var(--text)', borderRadius: '8px', padding: '5px 9px', fontWeight: '600', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}>Recebi parte</button>}
+                                  {botoesItem(t)}
+                                </div>
+                              </div>
+                              {parteAberta === t.id && (
+                                <form onSubmit={e => { e.preventDefault(); receberParte(t); }} style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                                  <input autoFocus inputMode="decimal" value={valorParte} onChange={e => setValorParte(e.target.value)} placeholder="Quanto recebeu? Ex: 50" aria-label={'Quanto recebeu de ' + p.nome} style={{ ...estilos.input, flex: '1 1 160px', padding: '8px 12px' }} />
+                                  <button type="submit" style={{ ...estilos.buttonPrimary, padding: '8px 14px', fontSize: '12px' }}>Confirmar</button>
+                                </form>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+
+                    {dividasRecebidas.length > 0 && (
+                      <div style={estilos.card}>
+                        <h3 style={{ fontSize: '15px', fontWeight: 'bold', color: 'var(--text-strong)', margin: '0 0 12px 0', display: 'flex', alignItems: 'center', gap: '8px' }}><CheckCircle2 size={16} color="var(--accent)" /> Já recebidos</h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {dividasRecebidas.map(t => (
+                            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '13px', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                              <span style={{ minWidth: 0, overflowWrap: 'anywhere', color: 'var(--text)' }}><strong>{t.devedor}</strong> · {t.description} <span style={{ color: 'var(--text-faint)' }}>· {formatarDataBR(t.confirmadoEm || t.date)}</span></span>
+                              <strong style={{ color: 'var(--accent-text)', whiteSpace: 'nowrap' }}>+ {formatarMoeda(t.amount)}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {abaAtiva === 'calendario' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
                   
@@ -3683,7 +3974,12 @@
                                 </div>}
                                 <div style={{ minWidth: 0 }}>
                                   <p style={{ margin: 0, fontWeight: 'bold', color: 'var(--text-strong)', fontSize: '14px', overflowWrap: 'anywhere' }}>{t.description}</p>
-                                  <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
+                                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, fontWeight: '600' }}>{t.category}</span>
+                                    {seloPendente(t)}
+                                    {t.devedor && <span style={{ fontSize: '10px', color: 'var(--c-amber)', fontWeight: '700' }}>👤 {t.devedor}</span>}
+                                    {t.aConfirmar === true && botaoConfirmar(t)}
+                                  </div>
                                 </div>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
